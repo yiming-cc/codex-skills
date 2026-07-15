@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tikit TI-ONE"
+  short_description: "Inspect resources and submit TI-ONE tasks with Tikit"
+  default_prompt: "Use $tikit-tione to inspect TI-ONE resources or submit a training task with the bundled scripts."

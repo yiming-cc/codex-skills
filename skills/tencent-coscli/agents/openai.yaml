@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tencent COSCLI"
+  short_description: "Sync data with Tencent COS via CFS"
+  default_prompt: "Use $tencent-coscli to sync a COS prefix to /cfs and verify permissions."
