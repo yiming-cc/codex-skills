@@ -85,6 +85,7 @@ files for API keys, cloud credentials, tokens, cookies, and registry passwords.
 ## Current skills
 
 - `karpathy-guidelines`
+- `codex-skills-sync`
 - `restore-vrdma`
 - `tencent-coscli`
 - `tikit-tione`
@@ -99,7 +100,9 @@ DISABLE_TELEMETRY=1 npx skills add yiming-cc/codex-skills -g -a codex --skill '*
 ```
 
 ```bash
+gh skill install yiming-cc/codex-skills codex-skills-sync --agent codex --scope user
 gh skill install yiming-cc/codex-skills karpathy-guidelines --agent codex --scope user
+gh skill install yiming-cc/codex-skills restore-vrdma --agent codex --scope user
 gh skill install yiming-cc/codex-skills tencent-coscli --agent codex --scope user
 gh skill install yiming-cc/codex-skills tikit-tione --agent codex --scope user
 ```

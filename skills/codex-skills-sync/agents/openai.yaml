@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Skills Sync"
+  short_description: "Sync personal Codex skills with Git"
+  default_prompt: "Use $codex-skills-sync to install, update, or sync my personal Codex skills."
