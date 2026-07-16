@@ -15,9 +15,23 @@ bash ~/codex-skills/bootstrap.sh
 ${CODEX_HOME:-$HOME/.codex}/skills
 ```
 
-If a same-named local skill already exists, the script moves it aside as
-`<skill>.backup-YYYYMMDDHHMMSS` before creating the link. Other skills are left
-untouched.
+If a same-named local skill already exists, the default behavior is to keep the
+existing skill and skip linking the repo version:
+
+```bash
+bash ~/codex-skills/bootstrap.sh --keep-existing
+```
+
+To replace same-named local skills with the repo version:
+
+```bash
+bash ~/codex-skills/bootstrap.sh --overwrite
+```
+
+Overwrite mode moves old skills outside the scanned skills directory, under
+`${CODEX_HOME:-$HOME/.codex}/skill-backups/bootstrap-*`, before creating links.
+This avoids duplicate skill discovery from in-place backup folders. Other skills
+are left untouched.
 
 ## Update on a machine
 
@@ -26,6 +40,9 @@ cd ~/codex-skills
 git pull --ff-only
 bash ./bootstrap.sh
 ```
+
+Use `bash ./bootstrap.sh --overwrite` when the repo version should replace a
+same-named local skill.
 
 ## Add or edit a skill
 
@@ -60,4 +77,3 @@ gh skill install yiming-cc/codex-skills karpathy-guidelines --agent codex --scop
 gh skill install yiming-cc/codex-skills tencent-coscli --agent codex --scope user
 gh skill install yiming-cc/codex-skills tikit-tione --agent codex --scope user
 ```
-
