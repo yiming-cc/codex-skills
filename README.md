@@ -44,6 +44,31 @@ bash ./bootstrap.sh
 Use `bash ./bootstrap.sh --overwrite` when the repo version should replace a
 same-named local skill.
 
+## Sync local Codex skills into this repo
+
+If a skill was installed or created directly under `$CODEX_HOME/skills`, import
+it into this repository:
+
+```bash
+cd ~/codex-skills
+bash ./sync-from-codex.sh
+git status --short
+```
+
+The default is to copy only new skills and keep repo skills when names collide.
+To replace same-named repo skills with the local Codex version:
+
+```bash
+bash ./sync-from-codex.sh --overwrite
+```
+
+After importing a new skill, run this if the current machine should use the
+repo-managed symlink instead of the original local directory:
+
+```bash
+bash ./bootstrap.sh --overwrite
+```
+
 ## Add or edit a skill
 
 Edit files under `skills/<skill-name>/`, then commit and push:
@@ -60,6 +85,7 @@ files for API keys, cloud credentials, tokens, cookies, and registry passwords.
 ## Current skills
 
 - `karpathy-guidelines`
+- `restore-vrdma`
 - `tencent-coscli`
 - `tikit-tione`
 

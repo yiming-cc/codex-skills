@@ -1,0 +1,4 @@
+interface:
+  display_name: "Restore vRDMA"
+  short_description: "Restore Tencent vRDMA and rebuild aws-ofi-nccl"
+  default_prompt: "Use $restore-vrdma to restore and verify the pinned Tencent vRDMA stack in this image."
