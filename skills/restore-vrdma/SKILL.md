@@ -5,7 +5,7 @@ description: Restore and verify the pinned Tencent TI-ONE vRDMA userspace stack 
 
 # Restore vRDMA
 
-Use the bundled script as the single recovery entry point. Resolve `scripts/restore_vrdma.sh` relative to this `SKILL.md`, not relative to the current project directory. It downloads and verifies the pinned Tencent vRDMA bundle, resolves apt prerequisites, reinstalls the complete bundle, removes the incompatible `irdma` provider entry, rebuilds `aws-ofi-nccl` at `v1.7.3-aws`, and validates the critical packages and shared libraries.
+Use the bundled script as the single recovery entry point. Resolve `scripts/restore_vrdma.sh` relative to this `SKILL.md`, not relative to the current project directory. It downloads and verifies the pinned Tencent vRDMA bundle, resolves apt prerequisites, reinstalls the vRDMA packages, removes the incompatible `irdma` provider entry, rebuilds `aws-ofi-nccl` at `v1.7.3-aws`, and validates the critical packages and shared libraries. It deliberately omits the bundle's Python 3.10-only `python3-pyverbs` package on the Python 3.12 base image; that package is not part of the NCCL transport path.
 
 ## Workflow
 

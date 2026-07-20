@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Project Memory"
+  short_description: "Initialize, write, and validate project memory"
+  default_prompt: "Use $manage-project-memory to initialize or update this project’s durable memory."

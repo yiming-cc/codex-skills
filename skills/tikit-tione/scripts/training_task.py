@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import sys
+import tempfile
 import time
 import warnings
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 
@@ -62,6 +67,7 @@ DEFAULT_FRAMEWORK = os.environ.get(
 DEFAULT_MODE = os.environ.get("TIONE_DEFAULT_MODE", "DDP")
 DEFAULT_WORKERS = int(os.environ.get("TIONE_DEFAULT_WORKERS", "1"))
 DEFAULT_GPU_TYPE = os.environ.get("TIONE_DEFAULT_GPU_TYPE", "N50p-72G")
+DEFAULT_RUN_USER = os.environ.get("TIONE_DEFAULT_RUN_USER", "image-default")
 DEFAULT_IMAGE_URL = os.environ.get("TIONE_DEFAULT_IMAGE_URL")
 DEFAULT_IMAGE_TYPE = os.environ.get("TIONE_DEFAULT_IMAGE_TYPE", "CCR")
 DEFAULT_REGISTRY_REGION = os.environ.get("TIONE_DEFAULT_REGISTRY_REGION")
@@ -69,7 +75,12 @@ DEFAULT_REGISTRY_ID = os.environ.get("TIONE_DEFAULT_REGISTRY_ID")
 DEFAULT_INPUT_COS = env_list("TIONE_DEFAULT_INPUT_COS")
 DEFAULT_INPUT_COSFS = env_list("TIONE_DEFAULT_INPUT_COSFS")
 DEFAULT_INPUT_DATASET = env_list("TIONE_DEFAULT_INPUT_DATASET")
-DEFAULT_INPUT_CFS = env_list("TIONE_DEFAULT_INPUT_CFS", "TIONE_INPUT_CFS_ROOT")
+DEFAULT_INPUT_CFS = env_list("TIONE_DEFAULT_INPUT_CFS")
+
+TRANSIENT_STATUSES = {"SUBMITTING", "CREATING", "PENDING", "RUNNING"}
+SUCCESS_STATUSES = {"SUCCEED"}
+FAILURE_STATUSES = {"FAILED", "STOPPED"}
+KNOWN_STATUSES = TRANSIENT_STATUSES | SUCCESS_STATUSES | FAILURE_STATUSES
 
 RESOURCE_PROFILES = {
     "N50p-72G": {
@@ -89,9 +100,11 @@ def require_tikit() -> None:
     try:
         import tikit  # noqa: F401
     except ModuleNotFoundError as exc:
+        control_python = os.environ.get("TIONE_CONTROL_PYTHON", "/usr/bin/python3")
         raise SystemExit(
-            "tikit is not installed. Retry with: "
-            "uv run --with tikit python <this-script> <args>"
+            "tikit is unavailable in this interpreter. Run this public control-plane tool with "
+            f"the image-provided interpreter, for example: {control_python} <this-script> <args>. "
+            "Do not install Tikit into a project environment."
         ) from exc
 
 
@@ -158,21 +171,58 @@ def parse_cfs(value: str) -> tuple[str, str, str]:
     return parts[0], parts[1], parts[2]
 
 
+def effective_data_inputs(args: argparse.Namespace) -> dict[str, list[str]]:
+    defaults = {
+        "input_cos": DEFAULT_INPUT_COS,
+        "input_cosfs": DEFAULT_INPUT_COSFS,
+        "input_dataset": DEFAULT_INPUT_DATASET,
+        "input_cfs": DEFAULT_INPUT_CFS,
+    }
+    effective: dict[str, list[str]] = {}
+    targets: dict[str, tuple[str, str]] = {}
+    for attr, default_values in defaults.items():
+        explicit = getattr(args, attr, None)
+        values = list(explicit if explicit is not None else ([] if args.no_default_inputs else default_values))
+        deduplicated = []
+        seen_values = set()
+        for value in values:
+            if value in seen_values:
+                continue
+            seen_values.add(value)
+            if attr == "input_cfs":
+                cfs_id, source, target = parse_cfs(value)
+                source_identity = f"{cfs_id}:{source}"
+            else:
+                source_identity, target = parse_pair(value, "--" + attr.replace("_", "-"))
+            previous = targets.get(target)
+            identity = (attr, source_identity)
+            if previous is not None and previous != identity:
+                raise SystemExit(
+                    f"conflicting data mounts for target {target}: "
+                    f"{previous[0]}:{previous[1]} and {attr}:{source_identity}"
+                )
+            targets[target] = identity
+            deduplicated.append(value)
+        effective[attr] = deduplicated
+    return effective
+
+
 def data_configs(args: argparse.Namespace) -> list[Any] | None:
     require_tikit()
     from tikit.models import TrainingDataConfig
 
+    inputs = effective_data_inputs(args)
     configs: list[TrainingDataConfig] = []
-    for value in args.input_cos or []:
+    for value in inputs["input_cos"]:
         source, target = parse_pair(value, "--input-cos")
         configs.append(TrainingDataConfig.new_mount_cos(source, target))
-    for value in args.input_cosfs or []:
+    for value in inputs["input_cosfs"]:
         source, target = parse_pair(value, "--input-cosfs")
         configs.append(TrainingDataConfig.new_mount_cosfs(source, target))
-    for value in args.input_dataset or []:
+    for value in inputs["input_dataset"]:
         dataset_id, target = parse_pair(value, "--input-dataset")
         configs.append(TrainingDataConfig.new_dataset_mount(dataset_id, target))
-    for value in args.input_cfs or []:
+    for value in inputs["input_cfs"]:
         cfs_id, source, target = parse_cfs(value)
         configs.append(TrainingDataConfig.new_mount_cfs(cfs_id, source, target))
     return configs or None
@@ -182,6 +232,18 @@ def effective_enable_rdma(args: argparse.Namespace) -> bool:
     if args.enable_rdma is not None:
         return args.enable_rdma
     return args.workers > 1
+
+
+def effective_start_cmd(args: argparse.Namespace) -> str:
+    if args.run_user == "image-default":
+        return args.cmd
+    if args.run_user == "root":
+        return (
+            'if [ "$(id -u)" -ne 0 ]; then '
+            'echo "TI-ONE task must run as root" >&2; exit 1; fi; '
+            + args.cmd
+        )
+    raise ValueError(f"unsupported run user: {args.run_user}")
 
 
 def system_framework(args: argparse.Namespace) -> Any:
@@ -212,17 +274,8 @@ def custom_framework(args: argparse.Namespace) -> Any:
     )
 
 
-def print_plan(args: argparse.Namespace, framework_kind: str) -> None:
-    print(f"name: {args.name}")
-    print(f"framework: {framework_kind}")
-    print(f"resource_group: {args.resource_group_id}")
-    print(f"network: {args.vpc_id}/{args.subnet_id}")
-    print(f"resource: {args.gpu_type} gpu={args.gpu or RESOURCE_PROFILES.get(args.gpu_type, {}).get('gpu', 8)} workers={args.workers}")
-    print(f"enable_rdma: {effective_enable_rdma(args)}")
-    if args.code_package_path:
-        print(f"code: {args.code_package_path}")
-    if args.cos_output:
-        print(f"output: {args.cos_output}")
+def build_plan(args: argparse.Namespace, framework_kind: str) -> dict[str, Any]:
+    inputs = effective_data_inputs(args)
     mounts = []
     for attr, label in (
         ("input_cos", "cos"),
@@ -230,13 +283,99 @@ def print_plan(args: argparse.Namespace, framework_kind: str) -> None:
         ("input_dataset", "dataset"),
         ("input_cfs", "cfs"),
     ):
-        for value in getattr(args, attr, None) or []:
-            mounts.append(f"{label}:{value}")
-    if mounts:
+        mounts.extend(f"{label}:{value}" for value in inputs[attr])
+    return {
+        "name": args.name,
+        "framework": framework_kind,
+        "resource_group_id": args.resource_group_id,
+        "vpc_id": args.vpc_id,
+        "subnet_id": args.subnet_id,
+        "resource": {
+            "gpu_type": args.gpu_type,
+            "gpu": args.gpu or RESOURCE_PROFILES.get(args.gpu_type, {}).get("gpu", 8),
+            "cpu": args.cpu or RESOURCE_PROFILES.get(args.gpu_type, {}).get("cpu"),
+            "memory": args.memory or RESOURCE_PROFILES.get(args.gpu_type, {}).get("memory"),
+            "workers": args.workers,
+        },
+        "run_user": args.run_user,
+        "enable_rdma": effective_enable_rdma(args),
+        "code_package_path": args.code_package_path,
+        "cos_output": args.cos_output,
+        "mounts": mounts,
+        "cmd": effective_start_cmd(args),
+    }
+
+
+def print_plan(args: argparse.Namespace, framework_kind: str) -> dict[str, Any]:
+    plan = build_plan(args, framework_kind)
+    if args.plan_format == "json":
+        print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
+        return plan
+    print(f"name: {plan['name']}")
+    print(f"framework: {plan['framework']}")
+    print(f"resource_group: {plan['resource_group_id']}")
+    print(f"network: {plan['vpc_id']}/{plan['subnet_id']}")
+    resource = plan["resource"]
+    print(f"resource: {resource['gpu_type']} gpu={resource['gpu']} workers={resource['workers']}")
+    print(f"run_user: {plan['run_user']}")
+    print(f"enable_rdma: {plan['enable_rdma']}")
+    if plan["code_package_path"]:
+        print(f"code: {plan['code_package_path']}")
+    if plan["cos_output"]:
+        print(f"output: {plan['cos_output']}")
+    if plan["mounts"]:
         print("mounts:")
-        for mount in mounts:
+        for mount in plan["mounts"]:
             print(f"- {mount}")
-    print(f"cmd: {args.cmd}")
+    if args.receipt:
+        print(f"receipt: {args.receipt}")
+    print(f"cmd: {plan['cmd']}")
+    return plan
+
+
+def print_dry_run(args: argparse.Namespace) -> None:
+    stream = sys.stderr if args.plan_format == "json" else sys.stdout
+    print("dry_run: add --yes to submit", file=stream)
+
+
+def plan_hash(plan: dict[str, Any]) -> str:
+    payload = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def existing_receipt(args: argparse.Namespace, plan: dict[str, Any]) -> str | None:
+    if not args.receipt:
+        return None
+    path = Path(args.receipt)
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    expected_hash = plan_hash(plan)
+    if data.get("plan_hash") != expected_hash:
+        raise SystemExit(f"receipt plan mismatch: {path}")
+    task_id = data.get("task_id")
+    if not task_id:
+        raise SystemExit(f"receipt has no task_id: {path}")
+    return str(task_id)
+
+
+def write_receipt(args: argparse.Namespace, plan: dict[str, Any], task_id: str) -> None:
+    if not args.receipt:
+        return
+    path = Path(args.receipt)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "submitted_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "task_id": task_id,
+        "name": args.name,
+        "plan_hash": plan_hash(plan),
+        "plan": plan,
+    }
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+        temp_path = f.name
+    os.replace(temp_path, path)
 
 
 def validate_live_submit(args: argparse.Namespace) -> None:
@@ -261,11 +400,15 @@ def validate_live_submit(args: argparse.Namespace) -> None:
 
 
 def submit(args: argparse.Namespace, framework: Any, framework_kind: str) -> int:
-    print_plan(args, framework_kind)
+    plan = print_plan(args, framework_kind)
     if not args.yes:
-        print("dry_run: add --yes to submit")
+        print_dry_run(args)
         return 0
     validate_live_submit(args)
+    task_id = existing_receipt(args, plan)
+    if task_id:
+        print(f"existing receipt: {task_id}")
+        return 0
     resp = client().create_training_task(
         name=args.name,
         framework=framework,
@@ -273,7 +416,7 @@ def submit(args: argparse.Namespace, framework: Any, framework_kind: str) -> int
         worker_resource=resource_config(args),
         code_package_path=args.code_package_path,
         input_data_config=data_configs(args),
-        worker_start_cmd=args.cmd,
+        worker_start_cmd=effective_start_cmd(args),
         resource_group_id=args.resource_group_id,
         remark=args.remark,
         log_enable=args.log_enable,
@@ -285,7 +428,11 @@ def submit(args: argparse.Namespace, framework: Any, framework_kind: str) -> int
         restart_limit=args.restart_limit,
     )
     data = normalize(resp)
-    print(f"submitted: {data.get('Id', 'unknown')}")
+    task_id = str(data.get("Id", "unknown"))
+    if task_id == "unknown":
+        raise SystemExit(f"training task response has no Id: {data}")
+    write_receipt(args, plan, task_id)
+    print(f"submitted: {task_id}")
     return 0
 
 
@@ -301,7 +448,7 @@ def cmd_submit_smoke(args: argparse.Namespace) -> int:
     args.remark = args.remark or "codex smoke test: short no-op job"
     if not args.yes:
         print_plan(args, "system:PYTORCH/" + DEFAULT_FRAMEWORK)
-        print("dry_run: add --yes to submit")
+        print_dry_run(args)
         return 0
     return submit(args, system_framework(args), "system:PYTORCH/" + DEFAULT_FRAMEWORK)
 
@@ -309,7 +456,7 @@ def cmd_submit_smoke(args: argparse.Namespace) -> int:
 def cmd_submit_system(args: argparse.Namespace) -> int:
     if not args.yes:
         print_plan(args, f"system:{args.framework_name}/{args.framework_env}")
-        print("dry_run: add --yes to submit")
+        print_dry_run(args)
         return 0
     return submit(args, system_framework(args), f"system:{args.framework_name}/{args.framework_env}")
 
@@ -319,13 +466,17 @@ def cmd_submit_custom(args: argparse.Namespace) -> int:
         raise SystemExit("missing --image-url or TIONE_DEFAULT_IMAGE_URL")
     if not args.yes:
         print_plan(args, f"custom:{args.image_type}/{args.image_url}")
-        print("dry_run: add --yes to submit")
+        print_dry_run(args)
         return 0
     return submit(args, custom_framework(args), f"custom:{args.image_type}/{args.image_url}")
 
 
+def training_task_detail(task_id: str) -> dict[str, Any]:
+    return normalize(client().describe_training_task(task_id)).get("TrainingTaskDetail", {})
+
+
 def cmd_status(args: argparse.Namespace) -> int:
-    data = normalize(client().describe_training_task(args.task_id)).get("TrainingTaskDetail", {})
+    data = training_task_detail(args.task_id)
     print(f"id: {data.get('Id', args.task_id)}")
     print(f"name: {data.get('Name', '')}")
     print(f"status: {data.get('Status', '')}")
@@ -336,11 +487,32 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_wait(args: argparse.Namespace) -> int:
+    last_status = None
+    while True:
+        data = training_task_detail(args.task_id)
+        status = str(data.get("Status", ""))
+        if status != last_status:
+            print(f"id: {data.get('Id', args.task_id)} status: {status}", flush=True)
+            last_status = status
+        if status in FAILURE_STATUSES:
+            print(f"failure: {data.get('FailureReason') or data.get('Message') or status}")
+            return 1
+        if status not in KNOWN_STATUSES:
+            raise SystemExit(f"unknown TI-ONE training task status: {status!r}")
+        if args.until == "started" and status in {"RUNNING", "SUCCEED"}:
+            return 0
+        if args.until == "terminal" and status == "SUCCEED":
+            return 0
+        time.sleep(args.poll_seconds)
+
+
 def add_common_submit_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--name", required=True)
     parser.add_argument("--cmd", required=True)
     parser.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, choices=sorted(RESOURCE_PROFILES))
     parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    parser.add_argument("--run-user", default=DEFAULT_RUN_USER, choices=("image-default", "root"))
     parser.add_argument("--gpu", type=float)
     parser.add_argument("--cpu", type=float)
     parser.add_argument("--memory", type=float, help="GB")
@@ -349,16 +521,23 @@ def add_common_submit_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--subnet-id", default=DEFAULT_SUBNET_ID)
     parser.add_argument("--code-package-path")
     parser.add_argument("--cos-output")
-    parser.add_argument("--input-cos", action="append", default=DEFAULT_INPUT_COS, help="COS_PATH:TARGET_PATH")
-    parser.add_argument("--input-cosfs", action="append", default=DEFAULT_INPUT_COSFS, help="COS_PATH:TARGET_PATH")
-    parser.add_argument("--input-dataset", action="append", default=DEFAULT_INPUT_DATASET, help="DATASET_ID:TARGET_PATH")
-    parser.add_argument("--input-cfs", action="append", default=DEFAULT_INPUT_CFS, help="CFS_ID:SOURCE_PATH:TARGET_PATH")
+    parser.add_argument("--input-cos", action="append", help="COS_PATH:TARGET_PATH")
+    parser.add_argument("--input-cosfs", action="append", help="COS_PATH:TARGET_PATH")
+    parser.add_argument("--input-dataset", action="append", help="DATASET_ID:TARGET_PATH")
+    parser.add_argument("--input-cfs", action="append", help="CFS_ID:SOURCE_PATH:TARGET_PATH")
+    parser.add_argument(
+        "--no-default-inputs",
+        action="store_true",
+        help="Do not use image-level default data mounts; explicit --input-* values still apply.",
+    )
     parser.add_argument("--remark")
     parser.add_argument("--log-enable", action="store_true")
     parser.add_argument("--log-logset-id")
     parser.add_argument("--log-topic-id")
     parser.add_argument("--enable-rdma", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--restart-limit", type=int, default=0)
+    parser.add_argument("--plan-format", choices=("text", "json"), default="text")
+    parser.add_argument("--receipt", help="Atomic JSON task receipt used to make submission idempotent.")
     parser.add_argument("--yes", action="store_true", help="Submit the task. Without this flag, only print the plan.")
 
 
@@ -370,6 +549,7 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--name")
     smoke.add_argument("--gpu-type", default=DEFAULT_GPU_TYPE, choices=sorted(RESOURCE_PROFILES))
     smoke.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
+    smoke.add_argument("--run-user", default=DEFAULT_RUN_USER, choices=("image-default", "root"))
     smoke.add_argument("--gpu", type=float)
     smoke.add_argument("--cpu", type=float)
     smoke.add_argument("--memory", type=float, help="GB")
@@ -382,10 +562,13 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--log-topic-id")
     smoke.add_argument("--enable-rdma", action=argparse.BooleanOptionalAction, default=None)
     smoke.add_argument("--restart-limit", type=int, default=0)
-    smoke.add_argument("--input-cos", action="append", default=DEFAULT_INPUT_COS)
-    smoke.add_argument("--input-cosfs", action="append", default=DEFAULT_INPUT_COSFS)
-    smoke.add_argument("--input-dataset", action="append", default=DEFAULT_INPUT_DATASET)
-    smoke.add_argument("--input-cfs", action="append", default=DEFAULT_INPUT_CFS)
+    smoke.add_argument("--input-cos", action="append")
+    smoke.add_argument("--input-cosfs", action="append")
+    smoke.add_argument("--input-dataset", action="append")
+    smoke.add_argument("--input-cfs", action="append")
+    smoke.add_argument("--no-default-inputs", action="store_true")
+    smoke.add_argument("--plan-format", choices=("text", "json"), default="text")
+    smoke.add_argument("--receipt")
     smoke.add_argument("--yes", action="store_true")
     smoke.set_defaults(func=cmd_submit_smoke)
 
@@ -410,6 +593,12 @@ def build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Print concise status for one training task.")
     status.add_argument("task_id")
     status.set_defaults(func=cmd_status)
+
+    wait = sub.add_parser("wait", help="Wait for a training task to start or reach a terminal state.")
+    wait.add_argument("task_id")
+    wait.add_argument("--until", choices=("started", "terminal"), default="started")
+    wait.add_argument("--poll-seconds", type=int, default=30)
+    wait.set_defaults(func=cmd_wait)
 
     return parser
 

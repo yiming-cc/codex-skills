@@ -12,7 +12,8 @@ Use this skill to help users operate Tencent Cloud TI-ONE through the Tikit Pyth
 - Never print, copy, or persist `SecretId`, `SecretKey`, tokens, cookies, or platform credentials.
 - Prefer environment variables or platform-managed credentials over hard-coded keys.
 - Treat delete, stop, overwrite, traffic-shift, and sync-with-delete operations as destructive; require explicit user intent.
-- In local shells, first check whether `tikit` is installed. TI-ONE Notebook/training containers usually include it; local workstations may not.
+- Treat Tikit as an image-level public control-plane tool. First discover the image-provided CLI, interpreter, and non-secret configuration; do not infer that Tikit is absent only because a project's virtual environment cannot import it.
+- Keep Tikit control-plane processes separate from project runtimes. Do not install Tikit into a project's environment; repair or provide the image-level public Tikit runtime when it is missing or broken.
 
 ## Quick Start
 
@@ -22,18 +23,7 @@ Resolve the installed skill directory instead of hard-coding a host path:
 TIONE_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/tikit-tione"
 ```
 
-Use the helper for environment checks and script templates:
-
-```bash
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" check
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" resources
-python3 "$TIONE_SKILL_DIR/scripts/training_task.py" submit-smoke
-python3 "$TIONE_SKILL_DIR/scripts/training_logs.py" <task-id>
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" render training > create_training.py
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods training
-```
-
-Before constructing TI-ONE commands, check for non-secret local defaults:
+Load image-level non-secret defaults and select the public control-plane interpreter:
 
 ```bash
 if [ -f "$TIONE_SKILL_DIR/references/local_env.sh" ]; then
@@ -41,38 +31,51 @@ if [ -f "$TIONE_SKILL_DIR/references/local_env.sh" ]; then
   . "$TIONE_SKILL_DIR/references/local_env.sh"
   set +a
 fi
+TIONE_CONTROL_PYTHON="${TIONE_CONTROL_PYTHON:-/usr/bin/python3}"
+```
+
+Use that interpreter for Tikit helpers:
+
+```bash
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" check
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" resources
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/training_task.py" submit-smoke
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/training_logs.py" <task-id>
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods training
 ```
 
 `references/local_env.sh` may contain environment-specific non-secret values
 such as region, resource group ID, VPC/subnet IDs, CFS mount ID, default GPU
-type, resource profiles, and verified custom image tuples. Never put secrets in that file. `training_task.py`
+type, runtime user, resource profiles, and verified custom image tuples. Never put secrets in that file. `training_task.py`
 also reads it automatically for default CLI values, but source it when writing
 raw shell commands or ad hoc scripts.
 
-If `tikit` is not installed locally, do not stop after `check` fails. For read-only
-inspection or dry-runs, retry with a temporary dependency so the project environment
-is not modified:
+`tikit_helper.py check` inspects the current interpreter, configured control
+interpreter, Tikit CLI shebang, and common image path. If none can import Tikit,
+report an image/environment problem. Do not repair it by modifying an unrelated
+project environment.
 
-```bash
-uv run --with tikit python "$TIONE_SKILL_DIR/scripts/tikit_helper.py" resources
-uv run --with tikit python "$TIONE_SKILL_DIR/scripts/training_task.py" submit-system --help
-uv run --with tikit python "$TIONE_SKILL_DIR/scripts/training_logs.py" <task-id>
-```
+The command submitted to TI-ONE is a separate project process. Enter that
+project's own runtime in the startup command using the project's documented
+venv, uv, conda, container entrypoint, or equivalent. Do not assume the public
+Tikit interpreter contains project dependencies, and do not assume the project
+runtime contains Tikit.
 
 If a task needs detailed API shape, read `references/tikit_notes.md` before writing code.
 
 ## Workflow
 
 1. Identify the requested TI-ONE operation: data, training, development machine, model acceleration, online service, batch task, logs, metrics, or general inspection.
-2. Run `scripts/tikit_helper.py check` when executing locally. If it says `tikit` is missing, retry read-only commands with `uv run --with tikit ...` before concluding the operation is impossible.
+2. Run `scripts/tikit_helper.py check` with the image-provided control interpreter. If the current project interpreter lacks Tikit but an image-level candidate works, use the image-level candidate without changing the project environment.
 3. For resource inspection, prefer `scripts/tikit_helper.py resources` and summarize only totals plus active resource names/statuses unless the user asks for detail.
    - Check GPU availability by **GPU type**, not only total GPU count. If one card type is saturated, consider another available card type instead of queueing everything on the first type.
-4. For training task submission, prefer `scripts/training_task.py` instead of ad hoc Python. First load local defaults from `references/local_env.sh` if present. Always run a dry-run first without `--yes`; add `--yes` only after the user explicitly confirms the exact plan.
+4. For training task submission, prefer `scripts/training_task.py` instead of ad hoc Python. First load local defaults from `references/local_env.sh` if present. Always run a dry-run first without `--yes`; use `--plan-format json` for machine validation. Add `--yes` only after the user explicitly confirms the exact plan.
 5. Generate a minimal script with `scripts/tikit_helper.py render <kind>` and edit placeholders instead of writing large SDK calls from memory.
 6. If `tikit` is available, use `scripts/tikit_helper.py methods <pattern>` to discover exact method names on `tikit.client.Client`.
 7. For live operations, print planned task names, region, resource group, network IDs, data mounts, COS output paths, resource configs, and startup commands before executing.
 8. Treat `resources` output as capacity information, not as guaranteed schedulability. If quotas or instance counts are ambiguous, run a small smoke task or dry-run before launching large jobs.
 9. After submission, immediately check task status and logs. Use `scripts/training_logs.py <task-id>` to get pod names and concise error lines. Do this before submitting many similar tasks.
+10. Use `--receipt <path>` for live submissions. The helper writes the returned task ID atomically and reuses a matching receipt instead of creating a duplicate task.
 
 ## Common Patterns
 
@@ -109,10 +112,16 @@ Common full-root mount shape:
 --input-cfs cfs-xxxxxx:/:/cfs
 ```
 
+Explicit `--input-*` arguments replace the corresponding image-level defaults.
+The helper removes exact duplicates and rejects different sources that target
+the same mount path. Use `--no-default-inputs` when a task should have no
+image-level default mounts. Never clear environment variables in a project
+wrapper merely to work around duplicate mounts.
+
 To discover a CFS mount used by a running development machine, inspect notebook details:
 
 ```bash
-uv run --with tikit python - <<'PY'
+"$TIONE_CONTROL_PYTHON" - <<'PY'
 import os
 from tikit.client import Client
 
@@ -184,6 +193,13 @@ ls -l /cfs/path/to/workdir/.tione_owner_smoke
 rm -f /cfs/path/to/workdir/.tione_owner_smoke
 ```
 
+When `TIONE_DEFAULT_RUN_USER=root`, keep the task as root and do not apply the
+user-switching pattern below. `training_task.py` shows `run_user: root` in the
+dry-run and prepends a UID-0 fail-fast check to the submitted start command.
+Expect CFS artifacts to be root-owned and repair ownership after training when
+the user requires normal-user access. Use `--run-user image-default` only when a
+specific task should opt out of this local root requirement.
+
 If the command starts as root, switch to a user with the same UID/GID as the CFS
 owner before running training. Some custom images already contain a user such as
 `guchun` with the CFS owner's UID. Always check by UID first and reuse that user;
@@ -216,19 +232,28 @@ correct inside the training container.
   - `submit-system`: TI-ONE built-in framework image.
   - `submit-custom`: custom image.
   - `status <task-id>`: concise task status.
+  - `wait <task-id> --until started|terminal`: wait through the shared TI-ONE state machine.
   - `scripts/training_logs.py <task-id>`: pod names plus filtered recent logs.
   Resource/network IDs are environment-specific. Prefer `references/local_env.sh` or setting `TIONE_RESOURCE_GROUP_ID`, `TIONE_VPC_ID`, and `TIONE_SUBNET_ID`; otherwise pass `--resource-group-id`, `--vpc-id`, and `--subnet-id` explicitly after checking `resources`.
-  Custom image defaults can come from `TIONE_DEFAULT_IMAGE_URL`, `TIONE_DEFAULT_IMAGE_TYPE`, `TIONE_DEFAULT_REGISTRY_REGION`, and `TIONE_DEFAULT_REGISTRY_ID` in `references/local_env.sh`; override them explicitly when a different image is required.
+  Custom image and runtime-user defaults can come from `TIONE_DEFAULT_IMAGE_URL`, `TIONE_DEFAULT_IMAGE_TYPE`, `TIONE_DEFAULT_REGISTRY_REGION`, `TIONE_DEFAULT_REGISTRY_ID`, and `TIONE_DEFAULT_RUN_USER` in `references/local_env.sh`; override them explicitly when a different image or runtime user is required.
   Resource profiles are examples only and may need overrides with `--gpu`, `--cpu`, and `--memory` based on the selected resource group.
   Minimal system submission parameters are `--name`, `--cmd`, and usually `--code-package-path`, `--cos-output`, plus data mounts such as `--input-cos bucket/path/:/mnt/data`.
   Do not assume a CFS path from the current shell is visible inside a training task. Mount it explicitly with `--input-cfs` or package/sync the code and data to COS.
   TI-ONE may require the `--cos-output` prefix to exist before task creation. If `InvalidParameterValue.CosPathNotExist` occurs, create the prefix with a small placeholder object using the `tencent-coscli` skill, then resubmit.
   Startup commands should be self-contained: `cd` to the mounted workdir, activate the required environment, and then run training. Avoid relying on interactive shell PATH changes that may only exist in the development machine.
   Prefer a one-GPU environment smoke task before launching many large tasks, especially when using a new image, CFS mount, or environment activation method.
+  Treat `SUBMITTING`, `CREATING`, `PENDING`, and `RUNNING` as normal transient states; `SUCCEED` as success; and `FAILED`/`STOPPED` as terminal failures. Do not duplicate these status sets in project-specific watchers.
+  A watcher failure after task creation is not proof that submission failed. Read the receipt and query the recorded task ID before attempting another submission.
+  For dependent tasks, require the parent task to reach `SUCCEED` and pass its artifact audit before submitting children.
 - **Development machines**: Tencent docs may still use `notebook` method names even though the product UI calls them development machines.
 - **Model acceleration**: Confirm model source, framework/format, input tensor shape, output COS path, optimization level, and target GPU type.
 - **Online services**: Treat version creation, service stop/delete, and traffic weight changes as user-visible production changes.
 - **Batch tasks**: Confirm one-off vs periodic execution, input/output data source, image/model/code package, startup command, and resource config.
+
+For large artifacts, do not treat file existence or platform success alone as
+readiness. Require experiment-supplied size expectations, repeated stable size
+checks, associated validation or manifest artifacts, save-log evidence, and
+either post-save progress or a clean task exit.
 
 ## References
 

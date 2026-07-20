@@ -29,9 +29,11 @@ def require_tikit() -> None:
     try:
         import tikit  # noqa: F401
     except ModuleNotFoundError as exc:
+        control_python = os.environ.get("TIONE_CONTROL_PYTHON", "/usr/bin/python3")
         raise SystemExit(
-            "tikit is not installed. Retry with: "
-            "uv run --with tikit python <this-script> <args>"
+            "tikit is unavailable in this interpreter. Run this public control-plane tool with "
+            f"the image-provided interpreter, for example: {control_python} <this-script> <args>. "
+            "Do not install Tikit into a project environment."
         ) from exc
 
 

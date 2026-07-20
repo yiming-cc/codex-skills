@@ -9,6 +9,9 @@ import inspect
 import json
 import os
 import platform
+import shlex
+import shutil
+import subprocess
 import sys
 import textwrap
 import warnings
@@ -16,6 +19,98 @@ from typing import Any, Callable
 
 
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _load_local_env_defaults() -> None:
+    env_path = os.path.join(SKILL_DIR, "references", "local_env.sh")
+    if not os.path.exists(env_path):
+        return
+    secret_words = ("SECRET", "TOKEN", "PASSWORD", "COOKIE", "CREDENTIAL")
+    with open(env_path, encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if not key or any(word in key.upper() for word in secret_words):
+                continue
+            os.environ.setdefault(key, value)
+
+
+_load_local_env_defaults()
+
+
+def _cli_python(cli_path: str | None) -> str | None:
+    if not cli_path or not os.path.isfile(cli_path):
+        return None
+    try:
+        with open(cli_path, encoding="utf-8", errors="replace") as f:
+            first_line = f.readline().strip()
+    except OSError:
+        return None
+    if not first_line.startswith("#!"):
+        return None
+    parts = shlex.split(first_line[2:].strip())
+    if not parts:
+        return None
+    if os.path.basename(parts[0]) == "env" and len(parts) > 1:
+        return shutil.which(parts[1])
+    return parts[0]
+
+
+def _probe_python_tikit(python: str) -> dict[str, str] | None:
+    if not python or not os.path.isfile(python):
+        return None
+    probe = (
+        "import importlib.util,json,sys;"
+        "s=importlib.util.find_spec('tikit');"
+        "print(json.dumps({'python':sys.executable,'tikit':s.origin if s else ''}))"
+    )
+    try:
+        result = subprocess.run(
+            [python, "-c", probe],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        data = json.loads(result.stdout.strip())
+    except json.JSONDecodeError:
+        return None
+    return data if data.get("tikit") else None
+
+
+def _control_python_candidates() -> list[tuple[str, str]]:
+    cli_path = os.environ.get("TIONE_TIKIT_CLI") or shutil.which("tikit")
+    raw = [
+        ("configured", os.environ.get("TIONE_CONTROL_PYTHON")),
+        ("tikit_cli_shebang", _cli_python(cli_path)),
+        ("image_default", "/usr/bin/python3"),
+        ("current", sys.executable),
+    ]
+    seen = set()
+    candidates = []
+    for label, value in raw:
+        if not value:
+            continue
+        resolved = os.path.realpath(value)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append((label, value))
+    return candidates
 
 
 def _client_header() -> str:
@@ -48,7 +143,7 @@ output_path = "your-bucket/path/to/output/"
 startup_command = "python train.py"
 
 # Verify exact Tikit class names and parameters against the installed version:
-# python3 {skill_dir}/scripts/tikit_helper.py methods training
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods training
 #
 # Typical fields: framework/image, worker resource config, input data configs,
 # output COS path, resource group, log config, VPC/subnet, max restart count.
@@ -70,7 +165,7 @@ print({{
 
 # TI-ONE docs may still call development machines "notebook" in API names.
 # Discover exact methods:
-# python3 {skill_dir}/scripts/tikit_helper.py methods notebook
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods notebook
 
 notebook_name = "example-dev-machine"
 print("Ready to create/start/stop development machine:", notebook_name)
@@ -83,10 +178,10 @@ print("Ready to create/start/stop development machine:", notebook_name)
 
 # Tikit data operations cover datasets plus COS/HDFS/Hive movement.
 # Discover exact methods:
-# python3 {skill_dir}/scripts/tikit_helper.py methods dataset
-# python3 {skill_dir}/scripts/tikit_helper.py methods cos
-# python3 {skill_dir}/scripts/tikit_helper.py methods hdfs
-# python3 {skill_dir}/scripts/tikit_helper.py methods hive
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods dataset
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods cos
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods hdfs
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods hive
 
 cos_path = "your-bucket/path/to/data/"
 print("Ready to inspect or move data:", cos_path)
@@ -100,7 +195,7 @@ print("Ready to inspect or move data:", cos_path)
 # Online model services are production-facing. Confirm resources and traffic
 # before creating versions, stopping services, deleting services, or shifting weights.
 # Discover exact methods:
-# python3 {skill_dir}/scripts/tikit_helper.py methods service
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods service
 
 service_name = "example-model-service"
 model_path = "your-bucket/path/to/model/"
@@ -115,7 +210,7 @@ print("Ready to create or update service:", service_name, model_path)
 # Batch tasks run offline processing or inference. Confirm one-off vs periodic
 # execution and input/output data sources before submission.
 # Discover exact methods:
-# python3 {skill_dir}/scripts/tikit_helper.py methods batch
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods batch
 
 task_name = "example-batch-task"
 input_path = "your-bucket/path/to/input/"
@@ -131,8 +226,8 @@ print("Ready to create batch task:", task_name, input_path, output_path)
 # Model acceleration needs model format, tensor shape/config, optimization level,
 # target GPU type, input model path, and output path.
 # Discover exact methods:
-# python3 {skill_dir}/scripts/tikit_helper.py methods accelerate
-# python3 {skill_dir}/scripts/tikit_helper.py methods model
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods accelerate
+# "$TIONE_CONTROL_PYTHON" {skill_dir}/scripts/tikit_helper.py methods model
 
 model_name = "example-model"
 input_model_path = "your-bucket/path/to/model/"
@@ -146,24 +241,27 @@ print("Ready to create model acceleration task:", model_name, input_model_path, 
 
 
 def cmd_check(_: argparse.Namespace) -> int:
-    print(f"python: {sys.version.split()[0]} ({platform.platform()})")
+    print(f"current_python: {sys.executable}")
+    print(f"python_version: {sys.version.split()[0]} ({platform.platform()})")
     print(f"skill_dir: {SKILL_DIR}")
 
-    spec = importlib.util.find_spec("tikit")
-    if not spec:
-        print("tikit: not installed")
-        print("install_hint: pip3 install -U tikit")
+    cli_path = os.environ.get("TIONE_TIKIT_CLI") or shutil.which("tikit")
+    print(f"tikit_cli: {cli_path or 'not found'}")
+    found = []
+    for label, python in _control_python_candidates():
+        probe = _probe_python_tikit(python)
+        if probe:
+            found.append((label, probe))
+            print(f"candidate:{label}: {probe['python']} -> {probe['tikit']}")
+        else:
+            print(f"candidate:{label}: {python} -> tikit unavailable")
+    if not found:
+        print("recommended_action: repair or provide the image-level Tikit installation; do not modify a project environment")
         return 1
 
-    print(f"tikit: found at {spec.origin}")
-    try:
-        import tikit  # type: ignore
-
-        version = getattr(tikit, "__version__", "unknown")
-        print(f"tikit_version: {version}")
-    except Exception as exc:  # pragma: no cover - environment dependent.
-        print(f"tikit_import_error: {type(exc).__name__}: {exc}")
-        return 2
+    recommended = found[0][1]
+    print(f"recommended_control_python: {recommended['python']}")
+    print("recommended_action: use the image-provided Tikit environment separately from project runtimes")
 
     for name in ("TENCENTCLOUD_SECRET_ID", "TENCENTCLOUD_SECRET_KEY", "TENCENTCLOUD_REGION"):
         value = os.environ.get(name)
@@ -175,7 +273,12 @@ def cmd_check(_: argparse.Namespace) -> int:
 def cmd_methods(args: argparse.Namespace) -> int:
     spec = importlib.util.find_spec("tikit")
     if not spec:
-        print("tikit is not installed; cannot inspect Client methods.", file=sys.stderr)
+        control_python = os.environ.get("TIONE_CONTROL_PYTHON", "/usr/bin/python3")
+        print(
+            "tikit is unavailable in the current interpreter; run this command with "
+            f"the image-provided control interpreter: {control_python}",
+            file=sys.stderr,
+        )
         return 1
 
     from tikit.client import Client  # type: ignore
@@ -305,7 +408,11 @@ def _brief_name(item: Any, *keys: str) -> str:
 def cmd_resources(args: argparse.Namespace) -> int:
     spec = importlib.util.find_spec("tikit")
     if not spec:
-        print("tikit: not installed")
+        control_python = os.environ.get("TIONE_CONTROL_PYTHON", "/usr/bin/python3")
+        print(
+            "tikit is unavailable in the current interpreter; run this command with "
+            f"the image-provided control interpreter: {control_python}"
+        )
         return 1
 
     secret_id = _env("TENCENTCLOUD_SECRET_ID")

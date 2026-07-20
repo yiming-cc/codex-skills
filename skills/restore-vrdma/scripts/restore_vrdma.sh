@@ -40,7 +40,7 @@ package_status() {
     local package_name
     for package_name in \
         rdma-core ibverbs-providers libibverbs1 librdmacm1 \
-        libfabric hccl librdmacm1t64 libibnetdisc5t64; do
+        libfabric hccl python3-pyverbs librdmacm1t64 libibnetdisc5t64; do
         dpkg-query -W -f='${Package}\t${Version}\t${db:Status-Status}\n' \
             "$package_name" 2>/dev/null || true
     done
@@ -95,6 +95,9 @@ prepare_sources() {
     [ -d "$DEB_DIR" ] || fail "bundle does not contain the expected deb directory"
     [ "$(find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 25 ] || \
         fail "bundle does not contain the expected 25 deb packages"
+    rm -f "$DEB_DIR"/python3-pyverbs_*.deb
+    [ "$(find "$DEB_DIR" -maxdepth 1 -type f -name '*.deb' | wc -l)" -eq 24 ] || \
+        fail "failed to exclude the Python 3.10-only python3-pyverbs package"
 
     log "cloning aws-ofi-nccl $AWS_OFI_NCCL_REF"
     git clone --quiet --depth 1 --branch "$AWS_OFI_NCCL_REF" \
@@ -118,6 +121,10 @@ backup_current_state() {
 install_prerequisites() {
     log "repairing apt state and installing build prerequisites"
     CHANGES_STARTED=1
+    if dpkg-query -W python3-pyverbs >/dev/null 2>&1; then
+        log "removing python3-pyverbs, which is incompatible with system Python 3.12"
+        dpkg --remove --force-depends python3-pyverbs
+    fi
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get -y --fix-broken install
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

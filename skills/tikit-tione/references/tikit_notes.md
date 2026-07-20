@@ -5,7 +5,6 @@ These notes summarize Tencent Cloud TI-ONE Tikit docs for Codex usage. Prefer th
 Official entry and related pages:
 
 - Python SDK operation guide: https://cloud.tencent.com/document/product/851/74120
-- SDK installation: https://cloud.tencent.com/document/product/851/74133
 - Dataset management: https://cloud.tencent.com/document/product/851/74135
 - Data upload/download: https://cloud.tencent.com/document/product/851/74136
 - Training task APIs: https://cloud.tencent.com/document/product/851/74137
@@ -18,13 +17,27 @@ Official entry and related pages:
 
 Tikit is a Python SDK for operating TI-ONE platform resources from Notebook, training containers, or local Python environments. It is not a training framework. Use it to automate platform actions: datasets, COS/HDFS/Hive data movement, training jobs, development machines, model acceleration, online services, and batch jobs.
 
-## Installation
+## Runtime Selection
 
-TI-ONE Notebook and training containers generally include `tikit`. Outside the platform, install or update with:
+Treat Tikit as an image-level public control-plane tool. Prefer the image-provided
+CLI, interpreter, and non-secret configuration. A project virtual environment not
+being able to import `tikit` does not mean Tikit is absent, and is not a reason to
+install it into that project environment.
+
+Load the skill defaults and verify the public runtime:
 
 ```bash
-pip3 install -U tikit
+TIONE_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/tikit-tione"
+set -a
+. "$TIONE_SKILL_DIR/references/local_env.sh"
+set +a
+TIONE_CONTROL_PYTHON="${TIONE_CONTROL_PYTHON:-/usr/bin/python3}"
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" check
 ```
+
+Keep platform control operations and project programs in separate processes. Run
+Tikit helpers with the public control interpreter, and enter each project's own
+runtime only inside that project's command.
 
 Create a client:
 
@@ -85,7 +98,8 @@ Because Tikit versions can drift, inspect installed symbols before executing unf
 
 ```bash
 TIONE_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/tikit-tione"
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods training
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods notebook
-python3 "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods service
+TIONE_CONTROL_PYTHON="${TIONE_CONTROL_PYTHON:-/usr/bin/python3}"
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods training
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods notebook
+"$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods service
 ```
