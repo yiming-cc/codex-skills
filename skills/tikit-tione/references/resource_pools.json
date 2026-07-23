@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "default_training_pool": "pro5000-training",
+  "selection_policy": {
+    "prefer_default_pool": true,
+    "fallback_requires_requested_workload": true,
+    "fallback_requires_available_capacity": true,
+    "queue_on_default_when_no_training_fallback_has_capacity": true
+  },
+  "pools": [
+    {
+      "key": "pro5000-training",
+      "name": "vrdma-pro5000-训练",
+      "resource_group_id": "rsg-clk2krr9",
+      "workloads": ["trainingtask"],
+      "training_fallback_priority": 0,
+      "vpc_id": "vpc-jsyugafc",
+      "subnet_id": "subnet-ia45fepf",
+      "gpu_profiles": [
+        {
+          "gpu_type": "HCC-N50p-72G-vr",
+          "gpu": 8,
+          "cpu": 250,
+          "memory_gb": 720
+        }
+      ]
+    },
+    {
+      "key": "h20-training",
+      "name": "h20训练",
+      "resource_group_id": "rsg-j4fvzcx6",
+      "workloads": ["*"],
+      "training_fallback_priority": 1,
+      "vpc_id": "vpc-jsyugafc",
+      "subnet_id": "subnet-9i4a2hyx",
+      "gpu_profiles": [
+        {
+          "gpu_type": "GPU-HCCPNV6",
+          "gpu": 8,
+          "cpu": 120,
+          "memory_gb": 1200
+        }
+      ]
+    },
+    {
+      "key": "pro5000-inference",
+      "name": "vrdma-pro5000-推理服务",
+      "resource_group_id": "rsg-g2skcmfj",
+      "workloads": ["notebook", "servicegroup"],
+      "training_fallback_priority": null,
+      "vpc_id": null,
+      "subnet_id": null,
+      "gpu_profiles": [
+        {
+          "gpu_type": "HCC-N50p-72G-vr",
+          "gpu": 8,
+          "cpu": 250,
+          "memory_gb": 720
+        }
+      ]
+    },
+    {
+      "key": "pro5000-notebook",
+      "name": "vrdma-pro5000-开发机",
+      "resource_group_id": "rsg-82sgv4jq",
+      "workloads": ["notebook"],
+      "training_fallback_priority": null,
+      "vpc_id": null,
+      "subnet_id": null,
+      "gpu_profiles": [
+        {
+          "gpu_type": "HCC-N50p-72G-vr",
+          "gpu": 8,
+          "cpu": 250,
+          "memory_gb": 720
+        }
+      ]
+    }
+  ]
+}

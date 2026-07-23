@@ -27,7 +27,7 @@ install it into that project environment.
 Load the skill defaults and verify the public runtime:
 
 ```bash
-TIONE_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/tikit-tione"
+TIONE_SKILL_DIR="$HOME/.agents/skills/tikit-tione"
 set -a
 . "$TIONE_SKILL_DIR/references/local_env.sh"
 set +a
@@ -97,7 +97,7 @@ Batch tasks support one-off or scheduled offline processing/inference. Creation 
 Because Tikit versions can drift, inspect installed symbols before executing unfamiliar operations:
 
 ```bash
-TIONE_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/tikit-tione"
+TIONE_SKILL_DIR="$HOME/.agents/skills/tikit-tione"
 TIONE_CONTROL_PYTHON="${TIONE_CONTROL_PYTHON:-/usr/bin/python3}"
 "$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods training
 "$TIONE_CONTROL_PYTHON" "$TIONE_SKILL_DIR/scripts/tikit_helper.py" methods notebook

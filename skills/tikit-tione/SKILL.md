@@ -20,7 +20,7 @@ Use this skill to help users operate Tencent Cloud TI-ONE through the Tikit Pyth
 Resolve the installed skill directory instead of hard-coding a host path:
 
 ```bash
-TIONE_SKILL_DIR="${CODEX_HOME:-$HOME/.codex}/skills/tikit-tione"
+TIONE_SKILL_DIR="$HOME/.agents/skills/tikit-tione"
 ```
 
 Load image-level non-secret defaults and select the public control-plane interpreter:
@@ -69,6 +69,8 @@ If a task needs detailed API shape, read `references/tikit_notes.md` before writ
 2. Run `scripts/tikit_helper.py check` with the image-provided control interpreter. If the current project interpreter lacks Tikit but an image-level candidate works, use the image-level candidate without changing the project environment.
 3. For resource inspection, prefer `scripts/tikit_helper.py resources` and summarize only totals plus active resource names/statuses unless the user asks for detail.
    - Check GPU availability by **GPU type**, not only total GPU count. If one card type is saturated, consider another available card type instead of queueing everything on the first type.
+   - Read `references/resource_pools.json` for the local resource-group catalog, exact GPU SKUs, workload permissions, network defaults, and training fallback order. Never submit a training task to a pool whose `workloads` omit `trainingtask`.
+   - Prefer `default_training_pool`. When it lacks the requested capacity, choose the lowest-priority compatible training fallback that currently has enough capacity; if none does, keep the default pool and let TI-ONE queue the task. Treat `workloads=["*"]` as compatible with every workload.
 4. For training task submission, prefer `scripts/training_task.py` instead of ad hoc Python. First load local defaults from `references/local_env.sh` if present. Always run a dry-run first without `--yes`; use `--plan-format json` for machine validation. Add `--yes` only after the user explicitly confirms the exact plan.
 5. Generate a minimal script with `scripts/tikit_helper.py render <kind>` and edit placeholders instead of writing large SDK calls from memory.
 6. If `tikit` is available, use `scripts/tikit_helper.py methods <pattern>` to discover exact method names on `tikit.client.Client`.

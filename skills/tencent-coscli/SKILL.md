@@ -22,7 +22,7 @@ description: Tencent Cloud COS data transfer with coscli on the LogosVLA/TI-ONE 
 If `/cfs/users/chenyiming/bin/coscli` is unavailable or the user needs their own install, run the installer. It downloads the official Tencent COSCLI binary for Linux/macOS, installs a wrapper, and can initialize `~/.cos.yaml`.
 
 ```bash
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/install_coscli.sh
+$HOME/.agents/skills/tencent-coscli/scripts/install_coscli.sh
 export PATH="$HOME/bin:$PATH"
 coscli -v
 ```
@@ -32,7 +32,7 @@ To configure the default bucket without exposing credentials in output:
 ```bash
 export COSCLI_SECRET_ID='<secret-id>'
 export COSCLI_SECRET_KEY='<secret-key>'
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/install_coscli.sh --configure --verify
+$HOME/.agents/skills/tencent-coscli/scripts/install_coscli.sh --configure --verify
 unset COSCLI_SECRET_ID COSCLI_SECRET_KEY
 ```
 
@@ -41,7 +41,7 @@ For a private credential file:
 ```bash
 install -m 600 /dev/null "$HOME/.coscli.env"
 # Edit the file locally so it contains COSCLI_SECRET_ID=... and COSCLI_SECRET_KEY=...
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/install_coscli.sh --configure --credential-file "$HOME/.coscli.env" --verify
+$HOME/.agents/skills/tencent-coscli/scripts/install_coscli.sh --configure --credential-file "$HOME/.coscli.env" --verify
 ```
 
 The installer defaults to:
@@ -60,10 +60,10 @@ Never paste or print the configured credentials. If a user asks to use site defa
 Use `scripts/cos_transfer.sh` for routine operations:
 
 ```bash
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/cos_transfer.sh ls teleoperate_data_humanoid_nero_sharpa/
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/cos_transfer.sh download teleoperate_data_humanoid_nero_sharpa/ /cfs/teleoperate_data_humanoid_nero_sharpa/
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/cos_transfer.sh upload /cfs/path/to/data/ users/chenyiming/transfer/data/
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/cos_transfer.sh sync cos://phymi-cos-1438869198/a/ /cfs/a/ -r --update
+$HOME/.agents/skills/tencent-coscli/scripts/cos_transfer.sh ls teleoperate_data_humanoid_nero_sharpa/
+$HOME/.agents/skills/tencent-coscli/scripts/cos_transfer.sh download teleoperate_data_humanoid_nero_sharpa/ /cfs/teleoperate_data_humanoid_nero_sharpa/
+$HOME/.agents/skills/tencent-coscli/scripts/cos_transfer.sh upload /cfs/path/to/data/ users/chenyiming/transfer/data/
+$HOME/.agents/skills/tencent-coscli/scripts/cos_transfer.sh sync cos://phymi-cos-1438869198/a/ /cfs/a/ -r --update
 ```
 
 The script accepts either full `cos://...` URLs or bucket-relative prefixes. Bucket-relative prefixes are expanded under `cos://phymi-cos-1438869198/`.

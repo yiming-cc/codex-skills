@@ -1,12 +1,14 @@
+---
+id: <stable_snake_case_id>
+description: "<一句话说明该 topic 在什么任务中相关>"
+positive_triggers: ["<具体任务意图>"]
+negative_triggers: ["<明确不应触发的相邻任务>"]
+paths: []
+status: needs_review
+last_verified: null
+---
+
 # <Topic 名称>
-
-## 范围
-
-说明这个记忆文件用于指导哪类任务。
-
-## 触发词
-
-列出应触发 agent 打开该 topic 的词语、路径、模块或用户表达。
 
 ## 稳定记忆
 
@@ -26,7 +28,7 @@
 
 ## 最近验证
 
-记录最近验证的日期、对象和方式。
+核验后首个非空行以与 frontmatter 相同的 `YYYY-MM-DD` 开头，并说明核验对象和方式。尚未核验且 `last_verified: null` 时只说明待核验，不写日期前缀。
 
 ## 过期 / 不要推断
 

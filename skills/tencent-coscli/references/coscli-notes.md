@@ -17,7 +17,7 @@ Do not run `coscli config show` in user-visible output because it decrypts and p
 Use the installer when the pinned `/cfs/users/chenyiming/bin/coscli` wrapper is not available or the user needs an isolated config:
 
 ```bash
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/install_coscli.sh
+$HOME/.agents/skills/tencent-coscli/scripts/install_coscli.sh
 export PATH="$HOME/bin:$PATH"
 coscli -v
 ```
@@ -40,7 +40,7 @@ To initialize the default `phymi-cos-1438869198` bucket, pass credentials throug
 ```bash
 export COSCLI_SECRET_ID='<secret-id>'
 export COSCLI_SECRET_KEY='<secret-key>'
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/install_coscli.sh --configure --verify
+$HOME/.agents/skills/tencent-coscli/scripts/install_coscli.sh --configure --verify
 unset COSCLI_SECRET_ID COSCLI_SECRET_KEY
 ```
 
@@ -49,7 +49,7 @@ or:
 ```bash
 install -m 600 /dev/null "$HOME/.coscli.env"
 # Add COSCLI_SECRET_ID=... and COSCLI_SECRET_KEY=... locally; do not print the file.
-/cfs/users/chenyiming/.codex/skills/tencent-coscli/scripts/install_coscli.sh --configure --credential-file "$HOME/.coscli.env" --verify
+$HOME/.agents/skills/tencent-coscli/scripts/install_coscli.sh --configure --credential-file "$HOME/.coscli.env" --verify
 ```
 
 Never store shared default AK/SK values in this skill, scripts, committed files, shell history, or chat output. If site default credentials are required, inject them from a private source such as `COSCLI_SECRET_ID`/`COSCLI_SECRET_KEY` or `--credential-file`.

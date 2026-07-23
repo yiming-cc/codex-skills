@@ -65,6 +65,35 @@ find "${CODEX_HOME:-$HOME/.codex}/skills" -maxdepth 1 -mindepth 1 \
   \( -type l -o -type d \) -printf '%f -> %l\n' | sort
 ```
 
+### Other agents
+
+To install the same skills into other agents (ZCode, Claude Code, Cursor) or
+into the cross-tool shared path `~/.agents/skills`, use `install-for-agent.sh`.
+It delegates to `bootstrap.sh` for each selected agent, so all idempotency,
+backup, and keep-vs-overwrite behavior is identical.
+
+Interactive menu:
+
+```bash
+bash "$repo/install-for-agent.sh"
+```
+
+Non-interactive:
+
+```bash
+bash "$repo/install-for-agent.sh" --agent zcode --agent agents
+```
+
+Known agents and default targets: `codex` (`~/.codex/skills`), `zcode`
+(`~/.zcode/skills`), `agents` (`~/.agents/skills`, cross-tool shared), `claude`
+(`~/.claude/skills`), `cursor` (`~/.cursor/skills`). Override each home via
+`CODEX_HOME` / `ZCODE_HOME` / `AGENTS_HOME` / `CLAUDE_HOME` / `CURSOR_HOME`.
+
+All skills are installed unconditionally. Skills whose body hardcodes Codex
+paths (`tencent-coscli`, `manage-proxy`, `manage-project-memory`, and this
+`codex-skills-sync` skill itself) may not work correctly under a non-Codex
+agent; flag this to the user before relying on them outside Codex.
+
 ## Sync Local Skills Back To Git
 
 When the user created or installed a skill directly in `$CODEX_HOME/skills`, import it:

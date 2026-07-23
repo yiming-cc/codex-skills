@@ -33,6 +33,48 @@ Overwrite mode moves old skills outside the scanned skills directory, under
 This avoids duplicate skill discovery from in-place backup folders. Other skills
 are left untouched.
 
+## Install for multiple agents
+
+`bootstrap.sh` installs into the Codex skills directory. To install the same
+skills into other agents (ZCode, Claude Code, Cursor) or into the cross-tool
+shared path `~/.agents/skills`, use `install-for-agent.sh`. It delegates to
+`bootstrap.sh` for each selected agent, so all idempotency, backup, and
+keep-vs-overwrite behavior is identical.
+
+Interactive (shows a numbered menu):
+
+```bash
+bash ~/codex-skills/install-for-agent.sh
+```
+
+Non-interactive (repeat `--agent`):
+
+```bash
+bash ~/codex-skills/install-for-agent.sh --agent zcode --agent agents
+```
+
+List known agents and their resolved target paths without installing:
+
+```bash
+bash ~/codex-skills/install-for-agent.sh --list
+```
+
+Known agents and their default target directories (override each home via
+`CODEX_HOME`, `ZCODE_HOME`, `AGENTS_HOME`, `CLAUDE_HOME`, `CURSOR_HOME`):
+
+| Agent  | Default target            | Note                          |
+|--------|---------------------------|-------------------------------|
+| codex  | `~/.codex/skills`         | bootstrap.sh default          |
+| zcode  | `~/.zcode/skills`         |                               |
+| agents | `~/.agents/skills`        | Cross-tool shared path        |
+| claude | `~/.claude/skills`        |                               |
+| cursor | `~/.cursor/skills`        |                               |
+
+All skills are installed unconditionally. Skills whose body hardcodes Codex
+paths (currently `tencent-coscli`, `manage-proxy`, `manage-project-memory`, and
+`codex-skills-sync`) may not work correctly under a non-Codex agent; review them
+before relying on them outside Codex.
+
 ## Update on a machine
 
 ```bash

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Proxy"
+  short_description: "Install, run, inspect, and troubleshoot Xray proxies"
+  default_prompt: "Use $manage-proxy to install, start, stop, or diagnose my Xray proxy."

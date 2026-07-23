@@ -66,7 +66,7 @@ DEFAULT_FRAMEWORK = os.environ.get(
 )
 DEFAULT_MODE = os.environ.get("TIONE_DEFAULT_MODE", "DDP")
 DEFAULT_WORKERS = int(os.environ.get("TIONE_DEFAULT_WORKERS", "1"))
-DEFAULT_GPU_TYPE = os.environ.get("TIONE_DEFAULT_GPU_TYPE", "N50p-72G")
+DEFAULT_GPU_TYPE = os.environ.get("TIONE_DEFAULT_GPU_TYPE", "HCC-N50p-72G-vr")
 DEFAULT_RUN_USER = os.environ.get("TIONE_DEFAULT_RUN_USER", "image-default")
 DEFAULT_IMAGE_URL = os.environ.get("TIONE_DEFAULT_IMAGE_URL")
 DEFAULT_IMAGE_TYPE = os.environ.get("TIONE_DEFAULT_IMAGE_TYPE", "CCR")
@@ -83,6 +83,11 @@ FAILURE_STATUSES = {"FAILED", "STOPPED"}
 KNOWN_STATUSES = TRANSIENT_STATUSES | SUCCESS_STATUSES | FAILURE_STATUSES
 
 RESOURCE_PROFILES = {
+    "HCC-N50p-72G-vr": {
+        "cpu": env_float("TIONE_HCC_N50P_8GPU_CPU", 250),
+        "memory": env_float("TIONE_HCC_N50P_8GPU_MEMORY", 720),
+        "gpu": env_float("TIONE_HCC_N50P_8GPU_GPU", 8),
+    },
     "N50p-72G": {
         "cpu": env_float("TIONE_N50P_8GPU_CPU", 252),
         "memory": env_float("TIONE_N50P_8GPU_MEMORY", 720),

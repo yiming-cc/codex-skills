@@ -2,7 +2,7 @@
 
 ## 文档职责
 
-- `.codex/docs/memory/MEMORY.md` 是唯一入口，只保存所有任务都需要知道的硬规则、检索协议、topic 路由和更新策略。
+- `<memory-root>/MEMORY.md` 是唯一入口，只保存所有任务都需要知道的硬规则、检索协议、topic 文件索引和更新策略。默认 `<memory-root>` 为 `.codex/docs/memory`；仓库已有 `AGENTS.md` 声明其他根目录时保持现状。
 - `topics/` 是唯一权威的长期记忆目录。正常任务根据入口路由只读取最相关的 1–3 个 topic。
 - `topic_template.md` 定义 topic 的标准结构，不是项目事实源。
 - `inbox/` 与 `dreams/` 在 v1 中只保留目录，不写入候选、推演或自动生成内容。
@@ -27,25 +27,46 @@
 
 ## Topic 选择
 
-- 先搜索现有 topic 的文件名、触发词和稳定记忆，再决定落位。
+- 先从 `MEMORY.md` 索引批量读取现有 topic 的 frontmatter，再按描述、正负触发、状态和路径提示决定落位；不要为路由而扫描全部正文。
 - 同一职责、工作流或偏好的补充应合并到现有 topic，不创建平行文档。
 - 只有主题具有独立触发条件、证据路径和稳定规则时才新建 topic。
 - 文件名使用简洁、稳定、无日期的 `snake_case.md`。
 - 只有形成清晰主题族时才使用子目录；不要为单个文件创建额外层级。
-- 新建或重命名 topic 时，在同一变更中更新 `MEMORY.md` 路由表。
+- 新建或重命名 topic 时，在同一变更中更新 `MEMORY.md` 文件索引。
 
 ## Topic 结构
 
-每个 topic 使用以下八个二级标题：
+每个 topic 必须以扁平 YAML frontmatter 开头：
 
-1. `范围`：定义该文档负责指导的任务，不复述完整项目背景。
-2. `触发词`：列出用户表达、模块、路径或任务类型，帮助入口做精确路由。
-3. `稳定记忆`：写可复用的规则、偏好、职责边界或工作流约束。
-4. `检索提示`：指出回答或修改前必须检查的当前文件、配置、日志或 artifact。
-5. `证据引用`：保存持久证据的路径或用户明确决策，不复制长篇历史分析。
-6. `已知失败模式`：记录反复发生的错误及避免方法；没有已知模式时简短说明。
-7. `最近验证`：记录最近核验日期、对象和方式，不只写日期。
-8. `过期 / 不要推断`：明确哪些事实会变化，未经重新检查不能从 memory 泛化。
+```yaml
+---
+id: stable_snake_case_id
+description: "一句话说明该 topic 在什么任务中相关。"
+positive_triggers: ["具体任务意图", "模块或路径"]
+negative_triggers: ["明确不应触发的相邻任务"]
+paths: ["path/or/glob/**"]
+status: active
+last_verified: "YYYY-MM-DD"
+---
+```
+
+- `id` 是全局唯一、稳定的 `snake_case` 标识，不随文件移动而改变。
+- `description` 只承担相关性路由，不写项目事实或完整规则。
+- `positive_triggers` 与 `negative_triggers` 使用具体任务意图；列表字段采用 JSON 风格的 YAML 行内数组。
+- `paths` 是相关性提示，不能仅因读取或修改匹配路径就无条件加载 topic；没有可靠路径提示时使用 `[]`。
+- `status` 只能是 `active`、`needs_review` 或 `deprecated`。已知内容与当前证据冲突或尚未完成真实核验时使用 `needs_review`。
+- `last_verified` 必须与正文“最近验证”一致。格式迁移不能推进验证日期；从未核验时使用 `null`，并将状态设为 `needs_review`。
+- `last_verified` 非空时，正文“最近验证”的首个非空行必须以同一个严格 `YYYY-MM-DD` 日期开头；不得使用未来日期。为 `null` 时该节说明尚未核验，不写日期前缀。
+- frontmatter 是 `id`、路由摘要、触发条件、相关路径、状态和验证日期的唯一机器可读事实源。正文不再设置 `范围` 或 `触发词` 章节；路由边界写入 frontmatter，可执行的职责边界写入“稳定记忆”。
+
+每个 topic 使用以下六个二级标题：
+
+1. `稳定记忆`：写可复用的规则、偏好、职责边界或工作流约束。
+2. `检索提示`：指出回答或修改前必须检查的当前文件、配置、日志或 artifact。
+3. `证据引用`：保存持久证据的路径或用户明确决策，不复制长篇历史分析。
+4. `已知失败模式`：记录反复发生的错误及避免方法；没有已知模式时简短说明。
+5. `最近验证`：记录最近核验日期、对象和方式，不只写日期。
+6. `过期 / 不要推断`：明确哪些事实会变化，未经重新检查不能从 memory 泛化。
 
 ## 内容与长度
 
@@ -56,23 +77,23 @@
 - 具体参数、checkpoint、metric、run ID 和临时路径只在确有检索价值时作为证据指针出现。
 - 不在 `MEMORY.md` 的硬规则与 topic 正文中重复同一条详细规则。
 
-## MEMORY 路由表
+## MEMORY Topic 索引
 
-每个 topic 对应一行：
+`MEMORY.md` 只保存 topic 的文件索引，每个 topic 对应一个列表项：
 
 ```markdown
-| `topics/example_topic.md` | 触发表达、路径或模块 | 该 topic 解决什么决策或工作流问题 | 回答前应核验的当前证据 |
+- `topics/example_topic.md`
 ```
 
-触发词应具有区分度，避免使用“代码”“训练”“配置”等会匹配绝大多数任务的宽泛词。用途只写路由摘要，详细规则留在 topic 中。
+入口不复制 description、触发词、路径或核验证据。检索时先批量读取索引文件的 frontmatter，再选择最相关的 1–3 个正文。这样索引只负责发现文件，frontmatter 负责路由，正文负责工作流和证据。
 
 ## AGENTS 接入
 
 根目录 `AGENTS.md` 至少应说明：
 
-- memory 入口位于 `.codex/docs/memory/MEMORY.md`；
+- memory 入口位于 `<memory-root>/MEMORY.md`；
 - 需要历史、偏好、工作流或架构决策时先读入口；
-- 每次只加载最相关的 1–3 个 topic；
+- 先批量读取索引 topic 的 frontmatter，再只加载最相关的 1–3 个正文；
 - memory 不替代当前代码或 artifact；
 - 只有用户明确要求时才能写 memory。
 
