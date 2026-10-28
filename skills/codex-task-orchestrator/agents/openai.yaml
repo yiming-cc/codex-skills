@@ -1,3 +1,0 @@
-interface:
-  display_name: "Task Orchestrator"
-  short_description: "Principal-agent workflow for plan-reviewed implementation, validation, and receipts"
