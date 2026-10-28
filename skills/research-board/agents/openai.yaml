@@ -1,0 +1,4 @@
+interface:
+  display_name: "科研看板"
+  short_description: "维护共享科研任务、项目文档和进展记录，并通过 Git 同步到团队看板"
+  default_prompt: "使用 $research-board 按我指定的范围更新共享科研看板。"

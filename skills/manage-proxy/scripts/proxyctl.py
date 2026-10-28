@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install, run, inspect, and troubleshoot a user-owned Xray proxy."""
+"""Install, run, inspect, and troubleshoot a user-owned Xray or sing-box proxy."""
 
 from __future__ import annotations
 
@@ -25,9 +25,39 @@ from typing import Any
 
 
 GITHUB_RELEASE_API = "https://api.github.com/repos/XTLS/Xray-core/releases/latest"
-SUPPORTED_PROVIDER = "xray"
-DEFAULT_CONFIG = Path("~/.config/xray/config.json").expanduser()
+SUPPORTED_PROVIDERS = ("xray", "sing-box")
 DEFAULT_HEALTH_URL = "https://example.com"
+DEFAULT_SINGBOX_LISTEN_PORT = 1080
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    name: str
+    default_config: Path
+    bin_env: tuple[str, ...]
+    config_env: tuple[str, ...]
+    run_prefix: tuple[str, ...]
+    test_prefix: tuple[str, ...]
+
+
+PROVIDER_SPECS = {
+    "xray": ProviderSpec(
+        name="xray",
+        default_config=Path("~/.config/xray/config.json"),
+        bin_env=("MANAGE_PROXY_XRAY_BIN", "XRAY_BIN"),
+        config_env=("MANAGE_PROXY_XRAY_CONFIG", "XRAY_CONFIG"),
+        run_prefix=("run", "-config"),
+        test_prefix=("run", "-test", "-config"),
+    ),
+    "sing-box": ProviderSpec(
+        name="sing-box",
+        default_config=Path("~/.config/sing-box/config.json"),
+        bin_env=("MANAGE_PROXY_SINGBOX_BIN", "SINGBOX_BIN"),
+        config_env=("MANAGE_PROXY_SINGBOX_CONFIG", "SINGBOX_CONFIG"),
+        run_prefix=("run", "-c"),
+        test_prefix=("check", "-c"),
+    ),
+}
 
 
 class ProxyError(RuntimeError):
@@ -52,12 +82,17 @@ class Endpoint:
 
 @dataclass(frozen=True)
 class Runtime:
+    provider: str
     binary: Path
     config: Path
     asset_dir: Path
     state_dir: Path
     pid_file: Path
     log_file: Path
+
+    @property
+    def spec(self) -> ProviderSpec:
+        return PROVIDER_SPECS[self.provider]
 
 
 def eprint(message: str) -> None:
@@ -72,34 +107,39 @@ def format_host(host: str) -> str:
     return f"[{host}]" if ":" in host and not host.startswith("[") else host
 
 
-def state_root() -> Path:
+def state_root(provider: str) -> Path:
     explicit = os.environ.get("MANAGE_PROXY_STATE_DIR")
     if explicit:
         return expand_path(explicit)
     xdg_state = os.environ.get("XDG_STATE_HOME")
     base = expand_path(xdg_state) if xdg_state else Path.home() / ".local/state"
-    return base / "manage-proxy" / SUPPORTED_PROVIDER
+    return base / "manage-proxy" / provider
 
 
-def find_xray_binary() -> Path:
-    explicit = os.environ.get("MANAGE_PROXY_XRAY_BIN") or os.environ.get("XRAY_BIN")
+def first_env(names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
+def find_binary(provider: str) -> Path:
+    explicit = first_env(PROVIDER_SPECS[provider].bin_env)
     if explicit:
         return expand_path(explicit)
 
-    discovered = shutil.which("xray")
+    discovered = shutil.which(provider)
     if discovered:
         return expand_path(discovered)
 
-    return Path.home() / ".local/bin/xray"
+    return Path.home() / ".local/bin" / provider
 
 
-def build_runtime() -> Runtime:
-    binary = find_xray_binary()
-    config = expand_path(
-        os.environ.get("MANAGE_PROXY_XRAY_CONFIG")
-        or os.environ.get("XRAY_CONFIG")
-        or str(DEFAULT_CONFIG)
-    )
+def build_runtime(provider: str) -> Runtime:
+    spec = PROVIDER_SPECS[provider]
+    binary = find_binary(provider)
+    config = expand_path(first_env(spec.config_env) or str(spec.default_config))
     explicit_asset = os.environ.get("MANAGE_PROXY_XRAY_ASSET_DIR") or os.environ.get(
         "XRAY_LOCATION_ASSET"
     )
@@ -107,22 +147,28 @@ def build_runtime() -> Runtime:
         asset_dir = expand_path(explicit_asset)
     else:
         asset_dir = binary.resolve(strict=False).parent
-    root = state_root()
+    root = state_root(provider)
     return Runtime(
+        provider=provider,
         binary=binary,
         config=config,
         asset_dir=asset_dir,
         state_dir=root,
-        pid_file=root / "xray.pid",
-        log_file=root / "xray.log",
+        pid_file=root / f"{provider}.pid",
+        log_file=root / f"{provider}.log",
     )
 
 
 def require_provider(provider: str) -> None:
-    if provider != SUPPORTED_PROVIDER:
+    if provider not in SUPPORTED_PROVIDERS:
         raise ProxyError(
-            f"unsupported provider: {provider!r}; v1 supports only {SUPPORTED_PROVIDER!r}"
+            f"unsupported provider: {provider!r}; supported: {', '.join(SUPPORTED_PROVIDERS)}"
         )
+
+
+def require_singbox(provider: str, action: str) -> None:
+    if provider != "sing-box":
+        raise ProxyError(f"{action} is supported for the sing-box provider only")
 
 
 def load_json_config(config: Path) -> dict[str, Any]:
@@ -130,14 +176,14 @@ def load_json_config(config: Path) -> dict[str, Any]:
         with config.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
     except FileNotFoundError as exc:
-        raise ProxyError(f"Xray config not found: {config}") from exc
+        raise ProxyError(f"config not found: {config}") from exc
     except PermissionError as exc:
-        raise ProxyError(f"Xray config is not readable: {config}") from exc
+        raise ProxyError(f"config is not readable: {config}") from exc
     except json.JSONDecodeError as exc:
-        raise ProxyError(f"cannot parse Xray config as JSON: {exc}") from exc
+        raise ProxyError(f"cannot parse config as JSON: {config}: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise ProxyError(f"Xray config root must be an object: {config}")
+        raise ProxyError(f"config root must be an object: {config}")
     return data
 
 
@@ -152,7 +198,7 @@ def normalize_client_host(listen: str) -> str:
     return listen.strip("[]")
 
 
-def discover_endpoint(config: Path) -> Endpoint:
+def discover_endpoint(config: Path, provider: str) -> Endpoint:
     port_override = os.environ.get("MANAGE_PROXY_PORT")
     host_override = os.environ.get("MANAGE_PROXY_HOST")
     if port_override:
@@ -168,12 +214,17 @@ def discover_endpoint(config: Path) -> Endpoint:
     for inbound in data.get("inbounds", []):
         if not isinstance(inbound, dict):
             continue
-        protocol = str(inbound.get("protocol", ""))
+        if provider == "sing-box":
+            protocol = str(inbound.get("type", ""))
+            raw_port = inbound.get("listen_port")
+        else:
+            protocol = str(inbound.get("protocol", ""))
+            raw_port = inbound.get("port")
         if protocol not in protocol_priority:
             continue
         try:
-            port = int(inbound["port"])
-        except (KeyError, TypeError, ValueError):
+            port = int(raw_port)
+        except (TypeError, ValueError):
             continue
         if not 1 <= port <= 65535:
             continue
@@ -193,24 +244,27 @@ def discover_endpoint(config: Path) -> Endpoint:
     return candidates[0][1]
 
 
-def xray_environment(runtime: Runtime) -> dict[str, str]:
+def process_environment(runtime: Runtime) -> dict[str, str]:
     env = os.environ.copy()
-    env["XRAY_LOCATION_ASSET"] = str(runtime.asset_dir)
+    if runtime.provider == "xray":
+        env["XRAY_LOCATION_ASSET"] = str(runtime.asset_dir)
     return env
 
 
+def binary_command(runtime: Runtime, prefix: tuple[str, ...], config: Path) -> list[str]:
+    return [str(runtime.binary), *prefix, str(config)]
+
+
 def xray_command(runtime: Runtime, *, test: bool = False) -> list[str]:
-    command = [str(runtime.binary), "run"]
-    if test:
-        command.append("-test")
-    command.extend(["-config", str(runtime.config)])
-    return command
+    prefix = runtime.spec.test_prefix if test else runtime.spec.run_prefix
+    return binary_command(runtime, prefix, runtime.config)
 
 
-def run_config_test(runtime: Runtime) -> subprocess.CompletedProcess[str]:
+def run_config_test(runtime: Runtime, config: Path | None = None) -> subprocess.CompletedProcess[str]:
+    command = binary_command(runtime, runtime.spec.test_prefix, config or runtime.config)
     return subprocess.run(
-        xray_command(runtime, test=True),
-        env=xray_environment(runtime),
+        command,
+        env=process_environment(runtime),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -291,41 +345,41 @@ def tail_log(path: Path, lines: int) -> list[str]:
 def ensure_prerequisites(runtime: Runtime) -> Endpoint:
     if not runtime.binary.is_file() or not os.access(runtime.binary, os.X_OK):
         raise ProxyError(
-            f"Xray binary is missing or not executable: {runtime.binary}; run install"
+            f"{runtime.provider} binary is missing or not executable: {runtime.binary}; run install"
         )
     if not runtime.config.is_file():
-        raise ProxyError(f"Xray config not found: {runtime.config}")
-    endpoint = discover_endpoint(runtime.config)
+        raise ProxyError(f"{runtime.provider} config not found: {runtime.config}")
+    endpoint = discover_endpoint(runtime.config, runtime.provider)
     try:
         result = run_config_test(runtime)
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ProxyError(f"Xray configuration check could not run: {exc}") from exc
+        raise ProxyError(f"{runtime.provider} configuration check could not run: {exc}") from exc
     if result.returncode != 0:
         detail = result.stdout.strip().splitlines()
         suffix = f": {detail[-1]}" if detail else ""
-        raise ProxyError(f"Xray configuration check failed{suffix}")
+        raise ProxyError(f"{runtime.provider} configuration check failed{suffix}")
     return endpoint
 
 
-def command_start(_: argparse.Namespace) -> int:
-    runtime = build_runtime()
+def command_start(args: argparse.Namespace) -> int:
+    runtime = build_runtime(args.provider)
     endpoint = ensure_prerequisites(runtime)
     runtime.state_dir.mkdir(parents=True, exist_ok=True)
     remove_stale_pid(runtime)
     status, pid = managed_process_status(runtime)
     if status == "running":
-        print(f"Xray is already running (pid {pid}, {endpoint.host}:{endpoint.port})")
+        print(f"{runtime.provider} is already running (pid {pid}, {endpoint.host}:{endpoint.port})")
         return 0
     if status in {"foreign", "unknown"}:
         raise ProxyError(
-            f"refusing to overwrite {runtime.pid_file}: pid {pid} is not a verified managed Xray process"
+            f"refusing to overwrite {runtime.pid_file}: pid {pid} is not a verified managed {runtime.provider} process"
         )
 
     try:
         with runtime.log_file.open("a", encoding="utf-8") as log_handle:
             process = subprocess.Popen(
                 xray_command(runtime),
-                env=xray_environment(runtime),
+                env=process_environment(runtime),
                 stdin=subprocess.DEVNULL,
                 stdout=log_handle,
                 stderr=subprocess.STDOUT,
@@ -333,7 +387,7 @@ def command_start(_: argparse.Namespace) -> int:
                 text=True,
             )
     except OSError as exc:
-        raise ProxyError(f"failed to start Xray: {exc}") from exc
+        raise ProxyError(f"failed to start {runtime.provider}: {exc}") from exc
 
     temporary_pid = runtime.pid_file.with_suffix(".pid.tmp")
     temporary_pid.write_text(f"{process.pid}\n", encoding="utf-8")
@@ -346,10 +400,10 @@ def command_start(_: argparse.Namespace) -> int:
             lines = tail_log(runtime.log_file, 12)
             if lines:
                 eprint("\n".join(lines))
-            raise ProxyError(f"Xray exited during startup with code {process.returncode}")
+            raise ProxyError(f"{runtime.provider} exited during startup with code {process.returncode}")
         if port_open(endpoint):
             print(
-                f"Xray started (pid {process.pid}, endpoint {endpoint.host}:{endpoint.port}, "
+                f"{runtime.provider} started (pid {process.pid}, endpoint {endpoint.host}:{endpoint.port}, "
                 f"log {runtime.log_file})"
             )
             return 0
@@ -361,32 +415,32 @@ def command_start(_: argparse.Namespace) -> int:
         pass
     runtime.pid_file.unlink(missing_ok=True)
     raise ProxyError(
-        f"Xray did not listen on {endpoint.host}:{endpoint.port} within 6 seconds; "
+        f"{runtime.provider} did not listen on {endpoint.host}:{endpoint.port} within 6 seconds; "
         f"inspect {runtime.log_file}"
     )
 
 
-def command_stop(_: argparse.Namespace) -> int:
-    runtime = build_runtime()
+def command_stop(args: argparse.Namespace) -> int:
+    runtime = build_runtime(args.provider)
     status, pid = managed_process_status(runtime)
     if status in {"stopped", "stale"}:
         runtime.pid_file.unlink(missing_ok=True)
-        print("Xray is not running")
+        print(f"{runtime.provider} is not running")
         return 0
     if status != "running" or pid is None:
         raise ProxyError(
-            f"refusing to stop pid {pid}: it is not a verified managed Xray process ({status})"
+            f"refusing to stop pid {pid}: it is not a verified managed {runtime.provider} process ({status})"
         )
 
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:
-        raise ProxyError(f"failed to signal managed Xray pid {pid}: {exc}") from exc
+        raise ProxyError(f"failed to signal managed {runtime.provider} pid {pid}: {exc}") from exc
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         if not pid_alive(pid):
             runtime.pid_file.unlink(missing_ok=True)
-            print(f"Xray stopped (pid {pid})")
+            print(f"{runtime.provider} stopped (pid {pid})")
             return 0
         time.sleep(0.2)
 
@@ -398,7 +452,7 @@ def command_stop(_: argparse.Namespace) -> int:
     while time.monotonic() < deadline and pid_alive(pid):
         time.sleep(0.1)
     runtime.pid_file.unlink(missing_ok=True)
-    print(f"Xray was force-stopped after the graceful timeout (pid {pid})")
+    print(f"{runtime.provider} was force-stopped after the graceful timeout (pid {pid})")
     return 0
 
 
@@ -419,9 +473,9 @@ def current_proxy_environment(endpoint: Endpoint) -> str:
     return "configured" if configured.issubset(expected) else "different"
 
 
-def command_status(_: argparse.Namespace) -> int:
-    runtime = build_runtime()
-    print(f"provider: {SUPPORTED_PROVIDER}")
+def command_status(args: argparse.Namespace) -> int:
+    runtime = build_runtime(args.provider)
+    print(f"provider: {runtime.provider}")
     print(f"binary: {runtime.binary}")
     print(f"config: {runtime.config}")
     print(f"state: {runtime.state_dir}")
@@ -442,14 +496,14 @@ def command_status(_: argparse.Namespace) -> int:
         version = "unknown"
     print(f"version: {version}")
 
+    endpoint: Endpoint | None = None
     try:
-        endpoint = discover_endpoint(runtime.config)
+        endpoint = discover_endpoint(runtime.config, runtime.provider)
         print(f"endpoint: {endpoint.protocol}://{endpoint.host}:{endpoint.port} ({endpoint.tag or 'untagged'})")
         print(f"listener: {'open' if port_open(endpoint) else 'closed'}")
         print(f"shell_environment: {current_proxy_environment(endpoint)}")
     except ProxyError as exc:
         print(f"endpoint_error: {exc}")
-        endpoint = None
 
     status, pid = managed_process_status(runtime)
     print(f"process: {status}" + (f" (pid {pid})" if pid else ""))
@@ -497,13 +551,13 @@ def curl_health(endpoint: Endpoint, url: str, timeout_seconds: float) -> tuple[b
     else:
         message = (
             "proxy request failed after the local endpoint was reachable; check upstream "
-            f"connectivity, protocol, credentials, and Xray logs ({message})"
+            f"connectivity, protocol, credentials, and proxy logs ({message})"
         )
     return False, message
 
 
 def command_check(args: argparse.Namespace) -> int:
-    runtime = build_runtime()
+    runtime = build_runtime(args.provider)
     endpoint = ensure_prerequisites(runtime)
     status, pid = managed_process_status(runtime)
     if not port_open(endpoint):
@@ -513,7 +567,7 @@ def command_check(args: argparse.Namespace) -> int:
         )
     if status != "running":
         eprint(
-            f"warning: proxy listener is open but no verified managed Xray process is recorded "
+            f"warning: proxy listener is open but no verified managed {runtime.provider} process is recorded "
             f"(status {status}, pid {pid})"
         )
 
@@ -528,26 +582,26 @@ def command_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_doctor(_: argparse.Namespace) -> int:
-    runtime = build_runtime()
+def command_doctor(args: argparse.Namespace) -> int:
+    runtime = build_runtime(args.provider)
     failures = 0
 
     if runtime.binary.is_file() and os.access(runtime.binary, os.X_OK):
-        print(f"[ok] Xray binary: {runtime.binary}")
+        print(f"[ok] {runtime.provider} binary: {runtime.binary}")
     else:
-        print(f"[fail] Xray binary: {runtime.binary}")
+        print(f"[fail] {runtime.provider} binary: {runtime.binary}")
         failures += 1
 
     if runtime.config.is_file() and os.access(runtime.config, os.R_OK):
-        print(f"[ok] Xray config: {runtime.config}")
+        print(f"[ok] {runtime.provider} config: {runtime.config}")
     else:
-        print(f"[fail] Xray config: {runtime.config}")
+        print(f"[fail] {runtime.provider} config: {runtime.config}")
         failures += 1
 
     endpoint: Endpoint | None = None
     if failures == 0:
         try:
-            endpoint = discover_endpoint(runtime.config)
+            endpoint = discover_endpoint(runtime.config, runtime.provider)
             print(f"[ok] proxy endpoint: {endpoint.protocol}://{endpoint.host}:{endpoint.port}")
         except ProxyError as exc:
             print(f"[fail] proxy endpoint: {exc}")
@@ -556,14 +610,26 @@ def command_doctor(_: argparse.Namespace) -> int:
         try:
             result = run_config_test(runtime)
             if result.returncode == 0:
-                print("[ok] Xray configuration check")
+                print("[ok] configuration check")
             else:
                 detail = result.stdout.strip().splitlines()
-                print(f"[fail] Xray configuration check: {detail[-1] if detail else 'unknown error'}")
+                print(f"[fail] configuration check: {detail[-1] if detail else 'unknown error'}")
                 failures += 1
         except (OSError, subprocess.TimeoutExpired) as exc:
-            print(f"[fail] Xray configuration check: {exc}")
+            print(f"[fail] configuration check: {exc}")
             failures += 1
+
+    if runtime.provider == "sing-box":
+        nodes_path = nodes_file(runtime)
+        if nodes_path.is_file():
+            try:
+                count = len(load_nodes(runtime))
+                print(f"[ok] nodes file: {nodes_path} ({count} nodes)")
+            except ProxyError as exc:
+                print(f"[fail] nodes file: {exc}")
+                failures += 1
+        else:
+            print(f"[info] nodes file missing: {nodes_path} (node switching unavailable)")
 
     if shutil.which("curl"):
         print("[ok] curl available")
@@ -580,20 +646,20 @@ def command_doctor(_: argparse.Namespace) -> int:
 
 
 def command_logs(args: argparse.Namespace) -> int:
-    runtime = build_runtime()
+    runtime = build_runtime(args.provider)
     if args.lines <= 0:
         raise ProxyError("--lines must be greater than zero")
     lines = tail_log(runtime.log_file, args.lines)
     if not lines:
-        print(f"no Xray log output at {runtime.log_file}")
+        print(f"no {runtime.provider} log output at {runtime.log_file}")
         return 0
     print("\n".join(lines))
     return 0
 
 
-def command_env(_: argparse.Namespace) -> int:
-    runtime = build_runtime()
-    endpoint = discover_endpoint(runtime.config)
+def command_env(args: argparse.Namespace) -> int:
+    runtime = build_runtime(args.provider)
+    endpoint = discover_endpoint(runtime.config, runtime.provider)
     if endpoint.protocol == "socks":
         http_proxy = endpoint.socks_url
         all_proxy = endpoint.socks_url
@@ -617,6 +683,150 @@ def command_env(_: argparse.Namespace) -> int:
     print("")
     print("export no_proxy='127.0.0.1,localhost,::1'")
     print('export NO_PROXY="$no_proxy"')
+    return 0
+
+
+def nodes_file(runtime: Runtime) -> Path:
+    explicit = os.environ.get("MANAGE_PROXY_NODES_FILE")
+    if explicit:
+        return expand_path(explicit)
+    return runtime.state_dir / "nodes.json"
+
+
+def load_nodes(runtime: Runtime) -> list[dict[str, Any]]:
+    path = nodes_file(runtime)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ProxyError(
+            f"nodes file not found: {path}; populate it from the subscription parser "
+            f"(or set MANAGE_PROXY_NODES_FILE)"
+        ) from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProxyError(f"cannot read nodes file {path}: {exc}") from exc
+    if not isinstance(data, list) or not data or not all(isinstance(n, dict) for n in data):
+        raise ProxyError(f"nodes file must be a non-empty JSON array of objects: {path}")
+    return data
+
+
+def singbox_outbound(node: dict[str, Any]) -> dict[str, Any]:
+    node_type = node.get("type", "anytls")
+    if node_type != "anytls":
+        raise ProxyError(f"unsupported node protocol for sing-box config generation: {node_type!r}")
+    server = node.get("server")
+    port = node.get("port")
+    password = node.get("password")
+    if not server or not port or not password:
+        raise ProxyError("node entry is missing server, port, or password")
+    params = node.get("params") if isinstance(node.get("params"), dict) else {}
+    tls: dict[str, Any] = {
+        "enabled": True,
+        "server_name": params.get("sni") or server,
+        "insecure": params.get("insecure") == "1",
+    }
+    fingerprint = params.get("fp")
+    if fingerprint:
+        tls["utls"] = {"enabled": True, "fingerprint": fingerprint}
+    return {
+        "type": "anytls",
+        "tag": "proxy",
+        "server": server,
+        "server_port": int(port),
+        "password": password,
+        "tls": tls,
+    }
+
+
+def current_listen_port(runtime: Runtime) -> int:
+    override = os.environ.get("MANAGE_PROXY_PORT")
+    if override:
+        try:
+            return int(override)
+        except ValueError as exc:
+            raise ProxyError("MANAGE_PROXY_PORT must be an integer") from exc
+    try:
+        data = load_json_config(runtime.config)
+        for inbound in data.get("inbounds", []):
+            if not isinstance(inbound, dict):
+                continue
+            raw = inbound.get("listen_port", inbound.get("port"))
+            if isinstance(raw, int) and 1 <= raw <= 65535:
+                return raw
+    except ProxyError:
+        pass
+    return DEFAULT_SINGBOX_LISTEN_PORT
+
+
+def build_singbox_config(node: dict[str, Any], listen_port: int) -> dict[str, Any]:
+    return {
+        "log": {"level": "warn", "timestamp": True},
+        "inbounds": [
+            {
+                "type": "mixed",
+                "tag": "mixed-in",
+                "listen": "127.0.0.1",
+                "listen_port": listen_port,
+            }
+        ],
+        "outbounds": [singbox_outbound(node), {"type": "direct", "tag": "direct"}],
+        "route": {"final": "proxy"},
+    }
+
+
+def write_config_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+
+
+def command_nodes(args: argparse.Namespace) -> int:
+    require_singbox(args.provider, "node listing")
+    runtime = build_runtime(args.provider)
+    nodes = load_nodes(runtime)
+    print(f"nodes file: {nodes_file(runtime)}")
+    for index, node in enumerate(nodes):
+        node_type = str(node.get("type", "anytls"))
+        name = str(node.get("name", ""))[:60]
+        print(f"{index:3d}  {node_type:<8} {name:<62} port={node.get('port')}")
+    return 0
+
+
+def command_use(args: argparse.Namespace) -> int:
+    require_singbox(args.provider, "node switching")
+    runtime = build_runtime(args.provider)
+    nodes = load_nodes(runtime)
+    if not 0 <= args.index < len(nodes):
+        raise ProxyError(f"node index out of range: 0..{len(nodes) - 1}")
+    node = nodes[args.index]
+    listen_port = current_listen_port(runtime)
+    candidate = build_singbox_config(node, listen_port)
+
+    runtime.state_dir.mkdir(parents=True, exist_ok=True)
+    temp_config = runtime.state_dir / "config.candidate.json"
+    write_config_atomic(temp_config, candidate)
+    try:
+        result = run_config_test(runtime, temp_config)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        temp_config.unlink(missing_ok=True)
+        raise ProxyError(f"generated config could not be validated: {exc}") from exc
+    if result.returncode != 0:
+        temp_config.unlink(missing_ok=True)
+        detail = result.stdout.strip().splitlines()
+        suffix = f": {detail[-1]}" if detail else ""
+        raise ProxyError(f"generated config failed validation{suffix}")
+    runtime.config.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(temp_config, runtime.config)
+    runtime.config.chmod(0o600)
+
+    name = str(node.get("name", ""))[:60]
+    status, _ = managed_process_status(runtime)
+    if status == "running":
+        print(f"switched to node {args.index} ({name}); restarting managed process")
+        command_stop(args)
+        return command_start(args)
+    print(f"config switched to node {args.index} ({name}); managed process is {status}, run start to apply")
     return 0
 
 
@@ -702,7 +912,7 @@ def safe_extract_xray(archive: Path, destination: Path) -> None:
 def switch_symlink(link: Path, target: Path) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     if link.exists() and not link.is_symlink():
-        raise ProxyError(f"refusing to replace non-symlink Xray binary: {link}")
+        raise ProxyError(f"refusing to replace non-symlink binary: {link}")
     temporary = link.with_name(f".{link.name}.tmp-{os.getpid()}")
     temporary.unlink(missing_ok=True)
     temporary.symlink_to(target)
@@ -710,7 +920,12 @@ def switch_symlink(link: Path, target: Path) -> None:
 
 
 def command_install(args: argparse.Namespace) -> int:
-    existing = find_xray_binary()
+    if args.provider != "xray":
+        raise ProxyError(
+            "install automates the xray provider only; install sing-box manually from the "
+            "official SagerNet/sing-box release"
+        )
+    existing = find_binary(args.provider)
     if existing.is_file() and os.access(existing, os.X_OK) and not args.upgrade:
         print(f"Xray is already installed: {existing}; use --upgrade to install the latest release")
         return 0
@@ -770,8 +985,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--provider",
-        default=os.environ.get("MANAGE_PROXY_PROVIDER", SUPPORTED_PROVIDER),
-        help="proxy provider (v1 supports only xray)",
+        default=os.environ.get("MANAGE_PROXY_PROVIDER", "xray"),
+        help=f"proxy provider (supports: {', '.join(SUPPORTED_PROVIDERS)})",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -786,31 +1001,38 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("doctor", help="check installation and configuration prerequisites").set_defaults(
         handler=command_doctor
     )
-    subparsers.add_parser("start", help="start the managed Xray process").set_defaults(
+    subparsers.add_parser("start", help="start the managed proxy process").set_defaults(
         handler=command_start
     )
-    subparsers.add_parser("stop", help="stop the verified managed Xray process").set_defaults(
+    subparsers.add_parser("stop", help="stop the verified managed proxy process").set_defaults(
         handler=command_stop
     )
-    subparsers.add_parser("restart", help="restart the managed Xray process").set_defaults(
+    subparsers.add_parser("restart", help="restart the managed proxy process").set_defaults(
         handler=command_restart
     )
     subparsers.add_parser("status", help="show process, listener, and shell environment status").set_defaults(
         handler=command_status
     )
 
-    check = subparsers.add_parser("check", help="run an end-to-end request through Xray")
+    check = subparsers.add_parser("check", help="run an end-to-end request through the proxy")
     check.add_argument("--url", help=f"health URL (default: {DEFAULT_HEALTH_URL})")
     check.add_argument("--timeout", type=float, default=10, help="curl timeout in seconds")
     check.set_defaults(handler=command_check)
 
-    logs = subparsers.add_parser("logs", help="print recent managed Xray logs")
-    logs.add_argument("--lines", type=int, default=50, help="number of lines to print")
+    logs = subparsers.add_parser("logs", help="print recent managed proxy logs")
+    logs.add_argument("--lines", type=int, default=50, help="number of lines")
     logs.set_defaults(handler=command_logs)
 
-    subparsers.add_parser("env", help="print Bash proxy exports derived from Xray config").set_defaults(
+    subparsers.add_parser("env", help="print Bash proxy exports derived from the proxy config").set_defaults(
         handler=command_env
     )
+
+    nodes = subparsers.add_parser("nodes", help="list available nodes (sing-box only)")
+    nodes.set_defaults(handler=command_nodes)
+
+    use = subparsers.add_parser("use", help="switch the sing-box config to a node by index")
+    use.add_argument("index", type=int, help="node index from the nodes command")
+    use.set_defaults(handler=command_use)
     return parser
 
 

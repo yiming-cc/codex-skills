@@ -1,0 +1,4 @@
+interface:
+  display_name: "启智平台任务管理"
+  short_description: "查询启智 GPU 与整节点资源，提交任务、诊断排队故障并管理开发机"
+  default_prompt: "使用 $qzcli 查询启智平台当前空闲资源，并按我的要求选择资源或提交任务。"
