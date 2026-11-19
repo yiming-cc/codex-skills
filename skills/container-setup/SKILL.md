@@ -21,7 +21,13 @@ description: 在 Linux 容器里初始化挂载的个人目录，将 HOME 中的
 /path/to/personal/setup
 ```
 
-用户明确要求配置阿里云 PAI 时，加 `--with-aliyun-pai`。它在本次接入时持久化 `.config/aliyun-pai`，复用个人盘已有的匹配版本或下载安装 CLI，并在公共 `.bashrc` 设置 `PAI_CLI_BIN` 和 `PAI_CONFIG_DIR`。新容器需要 PAI 时也使用这个选项。
+用户要求全部初始化时，加 `--all`。它执行默认初始化、个人盘的 `setup.d` 钩子和全部可选步骤。用 `--all --dry-run` 可先预览。
+
+```bash
+/path/to/personal/setup --all
+```
+
+目前唯一的可选步骤是阿里云 PAI，也可以用 `--with-aliyun-pai` 单独启用。它在本次接入时持久化 `.config/aliyun-pai`，复用个人盘已有的匹配版本或下载安装 CLI，并在公共 `.bashrc` 设置 `PAI_CLI_BIN` 和 `PAI_CONFIG_DIR`。新容器需要 PAI 时也使用其中一个选项。
 
 ```bash
 /path/to/personal/setup --with-aliyun-pai

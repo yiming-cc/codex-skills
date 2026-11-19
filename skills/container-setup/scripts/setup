@@ -263,9 +263,11 @@ def main():
     script = invoked.resolve()
     parser.add_argument("--personal", type=Path, help="existing mounted personal directory")
     parser.add_argument("--dry-run", action="store_true", help="print actions without writing or running hooks")
+    parser.add_argument("--all", action="store_true", help="enable all optional setup steps, including Aliyun PAI")
     parser.add_argument("--with-aliyun-pai", action="store_true",
                         help="install the PAI CLI and attach its configuration")
     args = parser.parse_args()
+    with_pai = args.all or args.with_aliyun_pai
     if args.personal is None and invoked.parent.resolve() == script.parent:
         parser.error("supply --personal when invoking the skill's initializer")
     volume = (args.personal or invoked.parent).expanduser().resolve(strict=True)
@@ -291,7 +293,7 @@ def main():
             raise ValueError(f"expected a directory: {hooks}")
         if exists(setup) and not (setup.is_file() or setup.is_symlink()):
             raise ValueError(f"invalid setup entry point: {setup}")
-        names = [*read_dirs(volume, args.with_aliyun_pai), Path(".bashrc")]
+        names = [*read_dirs(volume, with_pai), Path(".bashrc")]
         check_paths(home, volume, names)
         if not exists(manifest):
             print(f"create {manifest}")
@@ -313,7 +315,7 @@ def main():
                  if hook.is_file() and hook.suffix in (".sh", ".py")} if hooks.is_dir() else {}
         # Existing volumes may already have this installer in setup.d.
         pai_step = "25-pai-cli.sh"
-        if args.with_aliyun_pai:
+        if with_pai:
             steps.setdefault(pai_step, canonical.with_name("pai-cli.sh"))
         else:
             steps.pop(pai_step, None)
