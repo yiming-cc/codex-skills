@@ -128,6 +128,7 @@ files for API keys, cloud credentials, tokens, cookies, and registry passwords.
 
 - `karpathy-guidelines`
 - `codex-skills-sync`
+- [`container-setup`](skills/container-setup/SKILL.md)
 - `manage-project-memory`
 - `restore-vrdma`
 - `tencent-coscli`

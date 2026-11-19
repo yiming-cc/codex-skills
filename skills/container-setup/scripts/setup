@@ -26,6 +26,18 @@ if ! command -v codex >/dev/null 2>&1 && [ "$(uname -m)" = x86_64 ] &&
 fi
 # END container-setup
 '''
+PAI_BASH = r'''
+# BEGIN container-setup aliyun-pai
+if [ -x "$HOME/.local/bin/pai" ] && [ -d "$HOME/.config/aliyun-pai/cli" ]; then
+    export PAI_CLI_BIN="$HOME/.local/bin/pai"
+    export PAI_CONFIG_DIR="$HOME/.config/aliyun-pai/cli"
+    case ":${PATH-}:" in
+        *:"$HOME/.local/bin":*) ;;
+        *) export PATH="$HOME/.local/bin${PATH:+:$PATH}" ;;
+    esac
+fi
+# END container-setup aliyun-pai
+'''
 
 
 def exists(path):
@@ -36,7 +48,7 @@ def contains(parent, path):
     return path == parent or parent in path.parents
 
 
-def read_dirs(volume):
+def read_dirs(volume, with_pai):
     manifest = volume / "setup.paths"
     lines = manifest.read_text().splitlines() if exists(manifest) else DEFAULT_DIRS
     dirs = []
@@ -52,6 +64,11 @@ def read_dirs(volume):
         if any(contains(other, path) or contains(path, other) for other in dirs):
             raise ValueError(f"overlapping directories in setup.paths: {name}")
         dirs.append(path)
+    if with_pai:
+        for path in (Path(".config/aliyun-pai"), Path(".local/bin")):
+            if not any(contains(other, path) for other in dirs):
+                dirs = [other for other in dirs if not contains(path, other)]
+                dirs.append(path)
     return dirs
 
 
@@ -125,7 +142,7 @@ def seed(home, volume, name, names):
         staged.rename(shared)
 
 
-def attach(home, volume, names, preview):
+def seed_missing(home, volume, names, preview):
     # A HOME entry may resolve through another one (e.g. a linked .bashrc).
     # Import every missing item before changing any of those source paths.
     for name in names:
@@ -134,6 +151,9 @@ def attach(home, volume, names, preview):
             print(f"seed {shared} from {local}" if local.exists() else f"create {shared}")
             if not preview:
                 seed(home, volume, name, names)
+
+
+def attach(home, volume, names, preview):
     backup = None
     for name in names:
         local, shared = home / name, volume / name
@@ -166,15 +186,89 @@ def attach(home, volume, names, preview):
             raise
 
 
+def install_staged(staged, dest, volume):
+    saved = None
+    if exists(dest):
+        directory = Path(tempfile.mkdtemp(prefix=".container-setup-backup-", dir=volume))
+        saved = directory / dest.name
+        dest.rename(saved)
+        print(f"backup {dest} -> {saved}", flush=True)
+    try:
+        staged.rename(dest)
+    except OSError:
+        if saved is not None and not exists(dest):
+            saved.rename(dest)
+        raise
+
+
+def persistent_script(script, volume, preview):
+    if contains(volume, script):
+        return script
+    # The bootstrap skill can live in a disposable container HOME.
+    package = script.parent.parent
+    installed = volume / ".codex/skills/container-setup"
+    if not contains(volume, installed.parent.resolve()):
+        raise ValueError(f"skill directory points outside the volume: {installed.parent}")
+    files = ("SKILL.md", "scripts/setup", "scripts/pai-cli.sh")
+    if (contains(volume, installed.resolve())
+            and all((installed / name).is_file()
+                    and (installed / name).read_bytes() == (package / name).read_bytes()
+                    for name in files)
+            and os.access(installed / "scripts/setup", os.X_OK)):
+        return (installed / "scripts/setup").resolve()
+    print(f"install skill {installed}")
+    if not preview:
+        installed.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=installed.parent) as tmp:
+            staged = Path(tmp) / "container-setup"
+            (staged / "scripts").mkdir(parents=True)
+            for name in files:
+                shutil.copy2(package / name, staged / name)
+            install_staged(staged, installed, volume)
+    return installed / "scripts/setup"
+
+
+def install_entry(volume, script, preview):
+    setup = volume / "setup"
+    target = os.path.relpath(script, volume)
+    if setup.is_symlink() and os.readlink(setup) == target:
+        return
+    print(f"link {setup} -> {target}")
+    if not preview:
+        with tempfile.TemporaryDirectory(dir=volume) as tmp:
+            staged = Path(tmp) / "setup"
+            staged.symlink_to(target)
+            install_staged(staged, setup, volume)
+
+
+def configure_pai_shell(volume):
+    rc = volume / ".bashrc"
+    lines = rc.read_bytes().splitlines()
+    if b"# BEGIN container-setup aliyun-pai" in lines:
+        return
+    with tempfile.TemporaryDirectory(dir=volume) as tmp:
+        staged = Path(tmp) / ".bashrc"
+        shutil.copy2(rc, staged)
+        mode = staged.stat().st_mode & 0o777
+        staged.chmod(mode | 0o200)
+        with staged.open("ab") as stream:
+            stream.write(PAI_BASH.encode())
+        staged.chmod(mode)
+        staged.replace(rc)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    script = Path(__file__).resolve()
+    invoked = Path(__file__).absolute()
+    script = invoked.resolve()
     parser.add_argument("--personal", type=Path, help="existing mounted personal directory")
     parser.add_argument("--dry-run", action="store_true", help="print actions without writing or running hooks")
+    parser.add_argument("--with-aliyun-pai", action="store_true",
+                        help="install the PAI CLI and attach its configuration")
     args = parser.parse_args()
-    if args.personal is None and script.parent.parts[-2:] == ("container-setup", "scripts"):
+    if args.personal is None and invoked.parent.resolve() == script.parent:
         parser.error("supply --personal when invoking the skill's initializer")
-    volume = (args.personal or script.parent).expanduser().resolve(strict=True)
+    volume = (args.personal or invoked.parent).expanduser().resolve(strict=True)
     home = Path.home().resolve(strict=True)
     if not volume.is_dir() or contains(volume, home) or contains(home / BACKUPS, volume):
         raise ValueError(f"invalid personal directory for HOME {home}: {volume}")
@@ -195,47 +289,41 @@ def main():
             raise ValueError(f"expected a regular file: {manifest}")
         if exists(hooks) and (hooks.is_symlink() or not hooks.is_dir()):
             raise ValueError(f"expected a directory: {hooks}")
-        if exists(setup) and not setup.is_file():
+        if exists(setup) and not (setup.is_file() or setup.is_symlink()):
             raise ValueError(f"invalid setup entry point: {setup}")
-        names = [*read_dirs(volume), Path(".bashrc")]
+        names = [*read_dirs(volume, args.with_aliyun_pai), Path(".bashrc")]
         check_paths(home, volume, names)
-        # Existing entry points own their extra setup steps (including setup.d).
-        legacy = exists(setup) and not script.samefile(setup)
-        if legacy and os.access(setup, os.R_OK):
-            with setup.open("rb") as stream:
-                legacy = not stream.read(128).startswith(
-                    b"#!/usr/bin/env python3\n# container-setup personal directory entry point\n"
-                )
-        if legacy and not os.access(setup, os.X_OK):
-            raise ValueError(f"existing setup is not executable: {setup}")
-        for path in (manifest, hooks, setup):
-            if not exists(path):
-                print(f"create {path}")
-        # Stage both files before moving ~/.codex, which can contain this script.
-        if not args.dry_run:
-            with tempfile.TemporaryDirectory(prefix=".container-setup-", dir=volume) as tmp:
-                if not exists(setup):
-                    entry = Path(tmp) / "setup"
-                    shutil.copyfile(script, entry)
-                    entry.chmod(0o700)
-                    entry.rename(setup)
-                if not exists(manifest):
+        if not exists(manifest):
+            print(f"create {manifest}")
+            if not args.dry_run:
+                with tempfile.TemporaryDirectory(dir=volume) as tmp:
                     paths = Path(tmp) / "setup.paths"
                     paths.write_text("\n".join(DEFAULT_DIRS) + "\n")
                     paths.rename(manifest)
-            hooks.mkdir(mode=0o700, exist_ok=True)
-        attach(home, volume, names, args.dry_run)
-        if legacy:
-            print(f"run existing {setup}", flush=True)
+        if not exists(hooks):
+            print(f"create {hooks}")
             if not args.dry_run:
-                subprocess.run([setup], cwd=volume, check=True)
-            return
-        for hook in sorted(hooks.iterdir()) if hooks.is_dir() else ():
-            interpreter = {".sh": "bash", ".py": sys.executable}.get(hook.suffix)
-            if interpreter and hook.is_file():
-                print(f"run {hook}", flush=True)
-                if not args.dry_run:
-                    subprocess.run([interpreter, hook, volume], cwd=volume, check=True)
+                hooks.mkdir(mode=0o700)
+        seed_missing(home, volume, names, args.dry_run)
+        canonical = persistent_script(script, volume, args.dry_run)
+        install_entry(volume, canonical, args.dry_run)
+        attach(home, volume, names, args.dry_run)
+
+        steps = {hook.name: hook for hook in hooks.iterdir()
+                 if hook.is_file() and hook.suffix in (".sh", ".py")} if hooks.is_dir() else {}
+        # Existing volumes may already have this installer in setup.d.
+        pai_step = "25-pai-cli.sh"
+        if args.with_aliyun_pai:
+            steps.setdefault(pai_step, canonical.with_name("pai-cli.sh"))
+        else:
+            steps.pop(pai_step, None)
+        for name, hook in sorted(steps.items()):
+            print(f"run {hook}", flush=True)
+            if not args.dry_run:
+                interpreter = "bash" if hook.suffix == ".sh" else sys.executable
+                subprocess.run([interpreter, hook, volume], cwd=volume, check=True)
+                if name == pai_step:
+                    configure_pai_shell(volume)
 
 
 if __name__ == "__main__":

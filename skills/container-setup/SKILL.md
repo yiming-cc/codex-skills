@@ -13,10 +13,18 @@ description: 在 Linux 容器里初始化挂载的个人目录，将 HOME 中的
 ./scripts/setup --personal /path/to/personal
 ```
 
-需要预览时加 `--dry-run`。脚本依赖 Linux、Python 3 和 GNU `cp`。首次运行在个人盘生成独立可执行的 `setup`。同一份个人盘挂到下一台容器后，直接运行如下命令，然后新开交互式 Bash 加载公共配置。
+需要预览时加 `--dry-run`。脚本依赖 Linux、Python 3 和 GNU `cp`。个人盘的 `setup` 是指向本 skill 脚本的相对软链。若从盘外引导，脚本会先把 skill 安装到个人盘的 `.codex/skills/container-setup`。替换旧入口时，原件备份到个人盘的 `.container-setup-backup-*/setup`。
+
+下一台容器挂载个人盘后，直接执行以下命令，再新开交互式 Bash 加载公共配置。两个入口接受相同的选项。
 
 ```bash
 /path/to/personal/setup
+```
+
+用户明确要求配置阿里云 PAI 时，加 `--with-aliyun-pai`。它在本次接入时持久化 `.config/aliyun-pai`，复用个人盘已有的匹配版本或下载安装 CLI，并在公共 `.bashrc` 设置 `PAI_CLI_BIN` 和 `PAI_CONFIG_DIR`。新容器需要 PAI 时也使用这个选项。
+
+```bash
+/path/to/personal/setup --with-aliyun-pai
 ```
 
 - 默认目录是 `.codex`、`.ssh`、`.config/gh`、`.local/bin`。个人盘缺项时，从 HOME 复制，双方都缺目录时创建空目录。整项已有时以个人盘为准。
@@ -24,4 +32,4 @@ description: 在 Linux 容器里初始化挂载的个人目录，将 HOME 中的
 - `.bashrc` 单独处理。个人盘缺少它时，以当前 HOME 的版本为底稿，加入个人 bin 路径，并在需要时补上 Codex 可执行文件的路径。每个容器的 `~/.bashrc` 最终都链接到这份公共文件。
 - HOME 中被替换的原件保存在该容器的 `~/.container-setup-backups/run-*/` 下。已接好的链接可重复执行。复制中断后可重跑，查看输出中的备份位置和失败路径。
 - 用户要求调整目录时，编辑个人盘的 `setup.paths` 后重跑。每行一个相对 HOME 的目录，可用 `#` 写注释。目录之间不能嵌套。已有个人盘若要在首次运行时自定义清单，可先创建该文件。移除一行会停止管理该项，已经建立的链接仍可使用。
-- 生成的入口按文件名顺序运行个人盘 `setup.d/` 下的 `*.sh` 和 `*.py`，第一个参数是个人目录，工作目录也是个人目录。只使用用户自己的个人盘和初始化脚本。钩子每次接入都会运行，应支持重复执行。若盘上已有其他可执行的 `setup`，从 skill 运行时先接入 HOME，再调用原入口执行其余步骤。以后需要同时应用 `setup.paths` 和旧入口时仍从 skill 运行。
+- 两个入口均按文件名顺序运行个人盘 `setup.d/` 下的 `*.sh` 和 `*.py`，第一个参数和工作目录都是个人目录。`25-pai-cli.sh` 只在显式启用 PAI 时运行。个人盘提供同名钩子时优先使用，否则使用 skill 附带的安装脚本。钩子应支持重复执行。

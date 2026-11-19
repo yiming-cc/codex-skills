@@ -17,10 +17,9 @@ ALIYUN_PAI_SKILL_DIR="${ALIYUN_PAI_SKILL_DIR:-$HOME/.agents/skills/aliyun-pai-dl
 python3 "$ALIYUN_PAI_SKILL_DIR/scripts/pai_dlc.py" check
 ```
 
-当前 DSW 的持久化 setup 会将官方 PAI CLI 安装到
+在当前 DSW 上，执行 `/mnt/netdata/Team/Personal/ymc/setup --with-aliyun-pai` 会将官方 PAI CLI 安装到
 `/mnt/netdata/Team/Personal/ymc/.local/bin/pai`，并通过个人 `.bashrc` 设置
-`PAI_CLI_BIN`、`PAI_CONFIG_DIR` 和 PATH。更换容器后先运行
-`source /mnt/netdata/Team/Personal/ymc/setup`，再执行本 Skill。
+`PAI_CLI_BIN`、`PAI_CONFIG_DIR` 和 PATH。更换容器后执行同一命令，再新开 Bash 加载环境。
 
 脚本会自动读取 `references/local_env.sh`。AccessKey 不写入仓库，优先从当前进程的
 `PAI_ACCESS_KEY_ID` / `PAI_ACCESS_KEY_SECRET` 或 `ALIBABA_CLOUD_ACCESS_KEY_ID` /
