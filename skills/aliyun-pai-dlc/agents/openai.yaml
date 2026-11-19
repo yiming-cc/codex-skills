@@ -1,0 +1,4 @@
+interface:
+  display_name: "Aliyun PAI DLC"
+  short_description: "Submit and inspect PAI DLC training jobs"
+  default_prompt: "Use $aliyun-pai-dlc to check PAI resources or dry-run and submit a DLC training job."

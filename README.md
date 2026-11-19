@@ -132,6 +132,7 @@ files for API keys, cloud credentials, tokens, cookies, and registry passwords.
 - `restore-vrdma`
 - `tencent-coscli`
 - `tikit-tione`
+- `aliyun-pai-dlc`
 
 ## Optional installers
 

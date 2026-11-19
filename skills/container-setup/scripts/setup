@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+# container-setup personal directory entry point
+"""Initialize a mounted personal directory and attach this container's HOME."""
+import argparse
+from contextlib import ExitStack
+import fcntl
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+DEFAULT_DIRS = (".codex", ".ssh", ".config/gh", ".local/bin")
+BACKUPS = ".container-setup-backups"
+LOCK = ".container-setup.lock"
+BASH_INIT = r'''
+# BEGIN container-setup
+case ":${PATH-}:" in
+    *:"$HOME/.local/bin":*) ;;
+    *) export PATH="$HOME/.local/bin${PATH:+:$PATH}" ;;
+esac
+if ! command -v codex >/dev/null 2>&1 && [ "$(uname -m)" = x86_64 ] &&
+    [ -x "$HOME/.codex/packages/app-server-daemon/current/bin/codex" ]; then
+    export PATH="$HOME/.codex/packages/app-server-daemon/current/bin:$PATH"
+fi
+# END container-setup
+'''
+
+
+def exists(path):
+    return os.path.lexists(path)
+
+
+def contains(parent, path):
+    return path == parent or parent in path.parents
+
+
+def read_dirs(volume):
+    manifest = volume / "setup.paths"
+    lines = manifest.read_text().splitlines() if exists(manifest) else DEFAULT_DIRS
+    dirs = []
+    reserved = {BACKUPS, LOCK, ".bashrc", "setup", "setup.d", "setup.paths"}
+    for line in lines:
+        name = line.strip()
+        if not name or name.startswith("#"):
+            continue
+        path = Path(name)
+        if (path.is_absolute() or not path.parts or ".." in path.parts
+                or path.parts[0] in reserved):
+            raise ValueError(f"invalid directory in setup.paths: {name}")
+        if any(contains(other, path) or contains(path, other) for other in dirs):
+            raise ValueError(f"overlapping directories in setup.paths: {name}")
+        dirs.append(path)
+    return dirs
+
+
+def check_paths(home, volume, names):
+    for name in names:
+        local, shared = home / name, volume / name
+        if contains(local, volume) or contains(local.parent.resolve() / local.name, volume):
+            raise ValueError(f"personal directory lies inside {local}")
+        if shared.parent.resolve() != shared.parent or shared.is_symlink():
+            raise ValueError(f"persistent path traverses a symlink: {shared}")
+        # A container may already link the whole parent (e.g. ~/.config).
+        if local.parent.resolve() != local.parent and local.parent.resolve() != shared.parent:
+            raise ValueError(f"HOME parent points elsewhere: {local.parent}")
+        expected_file = name == Path(".bashrc")
+        if exists(shared):
+            valid = shared.is_file() if expected_file else shared.is_dir()
+            if not valid:
+                raise ValueError(f"unexpected persistent entry type: {shared}")
+        elif exists(local):
+            if local.is_symlink() and local.resolve() == shared:
+                continue
+            valid = local.is_file() if expected_file else local.is_dir()
+            if not valid or contains(local.resolve(), shared):
+                raise ValueError(f"cannot seed from {local}")
+
+
+def relocate_home_links(staged, shared, home, volume, names):
+    # Keep links between persisted entries usable when the next HOME differs.
+    def walk_error(error):
+        raise error
+
+    for parent, dirs, files in os.walk(staged, onerror=walk_error):
+        for item in dirs + files:
+            link = Path(parent) / item
+            if not link.is_symlink():
+                continue
+            target = Path(os.readlink(link))
+            if not contains(home, target) or ".." in target.parts:
+                continue
+            relative = target.relative_to(home)
+            if any(contains(name, relative) for name in names):
+                final_parent = shared / link.parent.relative_to(staged)
+                link.unlink()
+                link.symlink_to(os.path.relpath(volume / relative, final_parent))
+
+
+def seed(home, volume, name, names):
+    local, shared = home / name, volume / name
+    bashrc = name == Path(".bashrc")
+    shared.parent.mkdir(parents=True, exist_ok=True)
+    # Publish only a complete copy on the same filesystem as its destination.
+    with tempfile.TemporaryDirectory(prefix=".container-setup-", dir=shared.parent) as tmp:
+        staged = Path(tmp) / "entry"
+        if local.exists():
+            subprocess.run(["cp", "-aH", "--", local, staged], check=True)
+            if not bashrc:
+                relocate_home_links(staged, shared, home, volume, names)
+        elif bashrc:
+            staged.touch(mode=0o600)
+        else:
+            staged.mkdir(mode=0o700)
+        if bashrc:
+            if b"# BEGIN container-setup" not in staged.read_bytes().splitlines():
+                mode = staged.stat().st_mode & 0o777
+                staged.chmod(mode | 0o200)
+                with staged.open("ab") as stream:
+                    stream.write(BASH_INIT.encode())
+                staged.chmod(mode)
+        elif shared.name in (".ssh", ".codex", "gh", "aliyun-pai"):
+            staged.chmod(0o700)
+        staged.rename(shared)
+
+
+def attach(home, volume, names, preview):
+    # A HOME entry may resolve through another one (e.g. a linked .bashrc).
+    # Import every missing item before changing any of those source paths.
+    for name in names:
+        local, shared = home / name, volume / name
+        if not exists(shared):
+            print(f"seed {shared} from {local}" if local.exists() else f"create {shared}")
+            if not preview:
+                seed(home, volume, name, names)
+    backup = None
+    for name in names:
+        local, shared = home / name, volume / name
+        if local.resolve() == shared:
+            print(f"attached {local}")
+            continue
+        print(f"link {local} -> {shared}")
+        if preview:
+            if exists(local):
+                print(f"  back up {local} under {home / BACKUPS}")
+            continue
+        local.parent.mkdir(parents=True, exist_ok=True)
+        saved = None
+        if exists(local):
+            if backup is None:
+                base = home / BACKUPS
+                if base.is_symlink():
+                    raise ValueError(f"backup directory is a symlink: {base}")
+                base.mkdir(mode=0o700, exist_ok=True)
+                backup = Path(tempfile.mkdtemp(prefix="run-", dir=base))
+            saved = backup / name
+            saved.parent.mkdir(parents=True, exist_ok=True)
+            local.rename(saved)
+            print(f"  backup {saved}", flush=True)
+        try:
+            local.symlink_to(shared)
+        except OSError:
+            if saved is not None and not exists(local):
+                saved.rename(local)
+            raise
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    script = Path(__file__).resolve()
+    parser.add_argument("--personal", type=Path, help="existing mounted personal directory")
+    parser.add_argument("--dry-run", action="store_true", help="print actions without writing or running hooks")
+    args = parser.parse_args()
+    if args.personal is None and script.parent.parts[-2:] == ("container-setup", "scripts"):
+        parser.error("supply --personal when invoking the skill's initializer")
+    volume = (args.personal or script.parent).expanduser().resolve(strict=True)
+    home = Path.home().resolve(strict=True)
+    if not volume.is_dir() or contains(volume, home) or contains(home / BACKUPS, volume):
+        raise ValueError(f"invalid personal directory for HOME {home}: {volume}")
+
+    setup = volume / "setup"
+    hooks = volume / "setup.d"
+    manifest = volume / "setup.paths"
+    with ExitStack() as locks:
+        if not args.dry_run:
+            for directory in (home, volume):
+                fd = os.open(directory / LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                locks.callback(os.close, fd)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    raise ValueError(f"another setup is using {directory}")
+        if exists(manifest) and (manifest.is_symlink() or not manifest.is_file()):
+            raise ValueError(f"expected a regular file: {manifest}")
+        if exists(hooks) and (hooks.is_symlink() or not hooks.is_dir()):
+            raise ValueError(f"expected a directory: {hooks}")
+        if exists(setup) and not setup.is_file():
+            raise ValueError(f"invalid setup entry point: {setup}")
+        names = [*read_dirs(volume), Path(".bashrc")]
+        check_paths(home, volume, names)
+        # Existing entry points own their extra setup steps (including setup.d).
+        legacy = exists(setup) and not script.samefile(setup)
+        if legacy and os.access(setup, os.R_OK):
+            with setup.open("rb") as stream:
+                legacy = not stream.read(128).startswith(
+                    b"#!/usr/bin/env python3\n# container-setup personal directory entry point\n"
+                )
+        if legacy and not os.access(setup, os.X_OK):
+            raise ValueError(f"existing setup is not executable: {setup}")
+        for path in (manifest, hooks, setup):
+            if not exists(path):
+                print(f"create {path}")
+        # Stage both files before moving ~/.codex, which can contain this script.
+        if not args.dry_run:
+            with tempfile.TemporaryDirectory(prefix=".container-setup-", dir=volume) as tmp:
+                if not exists(setup):
+                    entry = Path(tmp) / "setup"
+                    shutil.copyfile(script, entry)
+                    entry.chmod(0o700)
+                    entry.rename(setup)
+                if not exists(manifest):
+                    paths = Path(tmp) / "setup.paths"
+                    paths.write_text("\n".join(DEFAULT_DIRS) + "\n")
+                    paths.rename(manifest)
+            hooks.mkdir(mode=0o700, exist_ok=True)
+        attach(home, volume, names, args.dry_run)
+        if legacy:
+            print(f"run existing {setup}", flush=True)
+            if not args.dry_run:
+                subprocess.run([setup], cwd=volume, check=True)
+            return
+        for hook in sorted(hooks.iterdir()) if hooks.is_dir() else ():
+            interpreter = {".sh": "bash", ".py": sys.executable}.get(hook.suffix)
+            if interpreter and hook.is_file():
+                print(f"run {hook}", flush=True)
+                if not args.dry_run:
+                    subprocess.run([interpreter, hook, volume], cwd=volume, check=True)
+
+
+if __name__ == "__main__":
+    os.umask(0o077)
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        sys.exit(f"container-setup: {error}")
