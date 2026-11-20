@@ -1,0 +1,4 @@
+interface:
+  display_name: "Project Setup"
+  short_description: "Initialize project memory and work document conventions"
+  default_prompt: "Use $project-setup to initialize project memory and record the experiment and plan document conventions."

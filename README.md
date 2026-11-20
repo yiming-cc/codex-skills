@@ -130,6 +130,7 @@ files for API keys, cloud credentials, tokens, cookies, and registry passwords.
 - `codex-skills-sync`
 - [`container-setup`](skills/container-setup/SKILL.md)
 - `manage-project-memory`
+- [`project-setup`](skills/project-setup/SKILL.md)
 - `restore-vrdma`
 - `tencent-coscli`
 - `tikit-tione`
