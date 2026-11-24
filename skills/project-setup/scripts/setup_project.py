@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize project memory and register the work document conventions."""
+"""Initialize project memory and the Agent work document directories."""
 
 import argparse
 import hashlib
@@ -21,6 +21,31 @@ LEGACY_PARAGRAPH = (
     "[`.agent/README.md`](.agent/README.md)。新项目可调用 `$project-setup` 一键初始化该结构。"
 )
 LEGACY_SECTION = "<!-- project-setup:agent-docs -->\n## Agent 文档目录约定\n\n" + LEGACY_PARAGRAPH
+WORK_DOCUMENT_READMES = {
+    ".agent/README.md": """# Agent 工作文档
+
+- `doc/` 存放项目理解说明，例如架构、配置、流程和模块关系。
+- `experiments/YYYY-MM-DD_<name>/` 存放实验细节和验收文档。
+- `plan/YYYY-MM-DD_<name>/` 存放计划、任务拆解和计划验收文档。
+- `memory/` 存放项目长期记忆，入口见 `memory/MEMORY.md`。
+
+初始化只建立目录和用途说明。具体工作文档按用户要求写入对应目录。
+""",
+    ".agent/doc/README.md": """# 项目理解说明
+
+本目录用于保存可复用的项目理解文档，包括架构、配置、流程、模块关系和维护说明。
+
+写入或更新说明前，先核对当前代码和配置，并在文档中保留证据路径。临时日志、实验结果和任务计划分别放入实验或计划目录。
+""",
+    ".agent/experiments/README.md": """# 实验文档
+
+每个实验使用独立目录 `.agent/experiments/YYYY-MM-DD_<name>/`。实验细节和验收结论分开保存，后续记录沿用同一主题目录。
+""",
+    ".agent/plan/README.md": """# 计划文档
+
+每个计划使用独立目录 `.agent/plan/YYYY-MM-DD_<name>/`。计划可记录目标、任务拆解、阶段安排、里程碑、进度和风险，计划验收文档放在同一目录。
+""",
+}
 # Digests of the three unmodified READMEs emitted by the previous initializer.
 LEGACY_READMES = {
     ".agent/README.md": "f173125c88dd7cea385df07e89fe92bfe9ca6c589bf0332c87ceb66342c6538f",
@@ -85,6 +110,15 @@ def run_memory(script, repo, root, display_repo):
         raise SystemExit(result.returncode)
 
 
+def initialize_work_document_dirs(repo):
+    for name, content in WORK_DOCUMENT_READMES.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_text(content)
+            print(f"create {name}")
+
+
 def setup(repo, root, topic, display_repo):
     if topic != DEFAULT_TOPIC and not (repo / root / topic).is_file():
         raise ValueError(f"Existing topic not found: {topic}")
@@ -105,6 +139,7 @@ def setup(repo, root, topic, display_repo):
         entry.write_text(updated)
         print(f"update {root / 'MEMORY.md'}")
     run_memory("validate_memory.py", repo, root, display_repo)
+    initialize_work_document_dirs(repo)
 
     agents = repo / "AGENTS.md"
     before = agents.read_text()
@@ -144,7 +179,7 @@ def main():
                 preview = Path(tmp)
                 if (repo / root).is_dir():
                     shutil.copytree(repo / root, preview / root)
-                for name in ("AGENTS.md", *LEGACY_READMES):
+                for name in ("AGENTS.md", *LEGACY_READMES, *WORK_DOCUMENT_READMES):
                     if (repo / name).is_file():
                         (preview / name).parent.mkdir(parents=True, exist_ok=True)
                         shutil.copyfile(repo / name, preview / name)

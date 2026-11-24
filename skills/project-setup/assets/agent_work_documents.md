@@ -1,9 +1,9 @@
 ---
 id: agent_work_documents
-description: "查阅项目的 Agent 工作文档规范，或按用户要求编写实验记录、验收文档和计划文档。"
-positive_triggers: ["整理工作文档规范", "实验文档放在哪里", "写实验记录", "编写验收报告", "把计划保存为文档", "更新计划文档"]
+description: "查阅项目的 Agent 工作文档规范，或按用户要求编写理解说明、实验记录、验收文档和计划文档。"
+positive_triggers: ["整理工作文档规范", "理解说明文档放在哪里", "编写项目理解说明", "实验文档放在哪里", "写实验记录", "编写验收报告", "把计划保存为文档", "更新计划文档"]
 negative_triggers: ["只要求执行实验或验收", "只要求在对话中给出计划或总结"]
-paths: [".agent/experiments/**", ".agent/plan/**"]
+paths: [".agent/doc/**", ".agent/experiments/**", ".agent/plan/**"]
 status: active
 last_verified: "{{date}}"
 ---
@@ -13,6 +13,7 @@ last_verified: "{{date}}"
 ## 稳定记忆
 
 - 执行实验、制定计划、验证结果或在对话中汇报进展，本身均不触发文档写入。用户明确要求落盘时，只创建此次所需的目录和文档。
+- 项目理解说明放在 `.agent/doc/`，用于解释架构、配置、流程和模块关系等可复用内容。临时日志、实验结果和任务计划分别放回实验或计划目录。
 - 每个实验使用独立目录 `.agent/experiments/YYYY-MM-DD_<name>/`，每个计划使用独立目录 `.agent/plan/YYYY-MM-DD_<name>/`。日期取实验或计划的创建日期。主题名应简短明确，建议使用小写英文、数字和连字符，避免空格和路径分隔符。同日不同主题用不同名称区分。
 - 同一主题的后续记录和收尾验收沿用原目录。目录内按内容为 Markdown 文件命名，可用 `snake_case` 或连字符，目录内风格保持一致。
 - 实验细节记录与实验验收分成两个 Markdown 文件。细节记录（如 `experiment.md`）写实验目的、方案、配置、执行步骤、观察结果和分析。验收文档（如 `acceptance.md`）按验收标准列出核验结果、证据位置、结论和未通过或待核验项。用户只要求其中一种时，仅编写所要求的文件。
@@ -20,11 +21,12 @@ last_verified: "{{date}}"
 
 ## 检索提示
 
-写入前先检查对应的实验或计划目录，确认是否已有同主题记录。编写验收结论时，核对实际日志、测试输出或运行产物，并在验收文档中引用证据位置。
+写入前先检查 `.agent/doc/`、对应的实验或计划目录，确认是否已有同主题记录。编写理解说明或验收结论时，核对当前代码、配置、日志、测试输出或运行产物，并在文档中引用证据位置。
 
 ## 证据引用
 
 - 用户要求执行 `project-setup` 时采用的工作文档约定，见该技能的 `assets/agent_work_documents.md`。
+- 初始化生成的目录用途说明位于 `.agent/README.md`、`.agent/doc/README.md`、`.agent/experiments/README.md` 和 `.agent/plan/README.md`。
 
 ## 已知失败模式
 
